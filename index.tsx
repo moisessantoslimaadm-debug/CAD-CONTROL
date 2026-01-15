@@ -51,7 +51,10 @@ import {
   RotateCcw,
   Type as TypeIcon,
   Palette,
-  FileUp
+  FileUp,
+  Eraser,
+  Sun,
+  Moon
 } from 'lucide-react';
 
 // --- Types ---
@@ -106,6 +109,7 @@ interface LayerConfig {
   lineWidth: number;
   pointSize: number;
   showLabels: boolean;
+  theme: 'light' | 'dark'; // Model space theme
 }
 
 // --- Utils ---
@@ -219,6 +223,7 @@ const App = () => {
     lineWidth: 2,
     pointSize: 4,
     showLabels: true,
+    theme: 'light'
   });
 
   const [validationErrors, setValidationErrors] = useState<Partial<Record<keyof ProjectMetadata, string>>>({});
@@ -391,6 +396,11 @@ const App = () => {
       const file = e.target.files?.[0];
       if (!file) return;
 
+      if (file.name.toLowerCase().endsWith('.kmz')) {
+          alert("O suporte direto a KMZ requer descompactação. Por favor, exporte como KML (texto) no Google Earth ou descompacte o arquivo primeiro.");
+          return;
+      }
+
       const reader = new FileReader();
       reader.onload = (event) => {
           const text = event.target?.result as string;
@@ -408,17 +418,9 @@ const App = () => {
                   if (coordsStr) {
                       const coords = coordsStr.split(',');
                       if (coords.length >= 2) {
-                          // KML is usually Lon,Lat,Alt. We map to X,Y (assuming local projection or just using raw if user wants)
-                          // Note: KML is Lat/Lon (WGS84). A real app would project to UTM.
-                          // For this demo, we assume the user understands these are raw values or pre-projected.
-                          // Or we simulate a simple projection multiplier for visibility if needed, but let's keep raw.
                           const x = parseFloat(coords[0]);
                           const y = parseFloat(coords[1]);
                           const z = parseFloat(coords[2]) || 0;
-                          
-                          // Simple check to see if it looks like Lat/Lon (small numbers) vs UTM (big numbers)
-                          // If Lat/Lon, maybe multiply to visualize better on our cartesian grid?
-                          // Let's just load raw.
                           newPoints.push({ id: name, x, y, z, desc: 'Importado de KML' });
                       }
                   }
@@ -436,7 +438,6 @@ const App = () => {
           }
       };
       reader.readAsText(file);
-      // Reset input
       e.target.value = '';
   };
 
@@ -627,7 +628,7 @@ const App = () => {
              <label className="cursor-pointer flex items-center space-x-2 px-4 py-2 bg-white text-slate-700 hover:bg-slate-50 border border-slate-300 rounded-lg text-sm font-medium transition shadow-sm">
                 <FileUp size={16} />
                 <span>KML</span>
-                <input type="file" accept=".kml,.xml" className="hidden" onChange={handleKMLUpload} />
+                <input type="file" accept=".kml,.xml,.kmz" className="hidden" onChange={handleKMLUpload} />
              </label>
              <button 
                 onClick={() => setShowImportModal(true)} 
@@ -682,6 +683,7 @@ const App = () => {
               canRedo={historyIndex < history.length - 1}
               openConfig={() => setShowConfigModal(true)}
               layerConfig={layerConfig}
+              clearDrawing={() => updateStateWithHistory([], [])}
             />
           )}
 
@@ -825,6 +827,17 @@ P2, 210.0, 505.0, 11, Cerca`}
                   <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Palette size={20}/> Configuração Visual</h3>
                   <div className="space-y-4">
                       <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Tema do Mapa</label>
+                          <div className="flex bg-slate-100 p-1 rounded-lg">
+                              <button onClick={() => setLayerConfig({...layerConfig, theme: 'light'})} className={`flex-1 py-1.5 text-xs font-medium rounded-md flex items-center justify-center gap-2 ${layerConfig.theme === 'light' ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
+                                  <Sun size={14}/> Paper (Claro)
+                              </button>
+                              <button onClick={() => setLayerConfig({...layerConfig, theme: 'dark'})} className={`flex-1 py-1.5 text-xs font-medium rounded-md flex items-center justify-center gap-2 ${layerConfig.theme === 'dark' ? 'bg-slate-800 shadow text-white' : 'text-slate-500 hover:text-slate-700'}`}>
+                                  <Moon size={14}/> Model (Escuro)
+                              </button>
+                          </div>
+                      </div>
+                      <div>
                           <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Cor dos Pontos</label>
                           <div className="flex gap-2">
                              <input type="color" value={layerConfig.pointColor} onChange={(e) => setLayerConfig({...layerConfig, pointColor: e.target.value})} className="h-8 w-12 rounded cursor-pointer border-0 p-0"/>
@@ -859,369 +872,268 @@ P2, 210.0, 505.0, 11, Cerca`}
 
 // --- Sub-Components ---
 
-const NavBtn = ({ active, onClick, icon, label }: any) => (
-  <button 
-    onClick={onClick}
-    className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-all duration-200 group relative ${
-      active 
-      ? 'bg-brand-50 text-brand-700 font-semibold' 
-      : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-    }`}
-  >
-    {active && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-brand-600 rounded-r-full"></div>}
-    <div className={`${active ? 'text-brand-600' : 'text-slate-400 group-hover:text-slate-600'}`}>{icon}</div>
-    <span className="text-sm">{label}</span>
-  </button>
-);
-
-const DataEditor = ({ points, setPoints, metadata, setMetadata, exportCSV, validationErrors, flyToPoint, selectedIds, setSelectedIds }: any) => {
-  const addPoint = () => {
-    const newId = `P${(points.length + 1).toString().padStart(2, '0')}`;
-    setPoints([...points, { id: newId, x: 0, y: 0, z: 0, desc: '' }]);
-  };
-
-  const updatePoint = (index: number, field: keyof SurveyPoint, value: any) => {
-    const newPoints = [...points];
-    newPoints[index] = { ...newPoints[index], [field]: value };
-    setPoints(newPoints);
-  };
-
-  const removePoint = (index: number) => {
-    const newPoints = points.filter((_: any, i: number) => i !== index);
-    setPoints(newPoints);
-  };
-
-  const toggleSelect = (id: string) => {
-      const newSet = new Set(selectedIds);
-      if (newSet.has(id)) newSet.delete(id);
-      else newSet.add(id);
-      setSelectedIds(newSet);
-  };
-
-  const toggleSelectAll = () => {
-      if (selectedIds.size === points.length) setSelectedIds(new Set());
-      else setSelectedIds(new Set(points.map((p: SurveyPoint) => p.id)));
-  };
-
-  const copyPoint = (p: SurveyPoint) => {
-      const text = `ID: ${p.id} | X: ${p.x} | Y: ${p.y} | Z: ${p.z}`;
-      navigator.clipboard.writeText(text);
-  };
-
-  return (
-    <div className="h-full flex flex-col overflow-hidden bg-slate-50">
-      
-      {/* Metadata Form */}
-      <div className="p-8 pb-4">
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-          <div className="mb-6 flex items-center justify-between border-b border-slate-100 pb-4">
-            <div className="flex items-center space-x-2 text-slate-800">
-              <Settings size={18} className="text-brand-600" />
-              <h3 className="font-bold text-base">Metadados do Projeto</h3>
-            </div>
-            <div className="flex gap-2">
-                 {selectedIds.size > 0 && (
-                     <span className="text-xs font-bold text-brand-600 bg-brand-50 px-2 py-1.5 rounded flex items-center">
-                        {selectedIds.size} selecionado(s)
-                     </span>
-                 )}
-                <button onClick={() => exportCSV(selectedIds)} className="text-xs flex items-center gap-1.5 text-slate-600 hover:text-brand-600 hover:bg-brand-50 transition px-3 py-1.5 rounded-md font-medium border border-transparent hover:border-brand-200">
-                <Download size={14}/> <span>{selectedIds.size > 0 ? 'Exportar Seleção' : 'Exportar CSV'}</span>
-                </button>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <Input label="Título do Projeto" value={metadata.title} onChange={(v: string) => setMetadata({...metadata, title: v})} error={validationErrors?.title} />
-            <Input label="Proprietário" value={metadata.owner} onChange={(v: string) => setMetadata({...metadata, owner: v})} error={validationErrors?.owner} />
-            <Input label="Matrícula/CNS" value={metadata.registryId} onChange={(v: string) => setMetadata({...metadata, registryId: v})} />
-            <Input label="Localização" value={metadata.location} onChange={(v: string) => setMetadata({...metadata, location: v})} error={validationErrors?.location} />
-            <Input label="Resp. Técnico" value={metadata.professional} onChange={(v: string) => setMetadata({...metadata, professional: v})} />
-            <Input label="CREA/CFT" value={metadata.crea} onChange={(v: string) => setMetadata({...metadata, crea: v})} />
-            <Input label="Zona UTM" placeholder="Ex: 23S" value={metadata.utmZone} onChange={(v: string) => setMetadata({...metadata, utmZone: v})} error={validationErrors?.utmZone} />
-          </div>
-        </div>
-      </div>
-
-      {/* Points Table */}
-      <div className="flex-1 p-8 pt-0 overflow-hidden flex flex-col">
-        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col shadow-sm flex-1">
-          <div className="p-4 px-6 border-b border-slate-200 flex justify-between items-center bg-white">
-             <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2"><Layers size={16} className="text-brand-600"/> Tabela de Coordenadas</h3>
-             <button onClick={addPoint} className="flex items-center space-x-1.5 text-xs bg-brand-50 hover:bg-brand-100 text-brand-700 px-3 py-2 rounded-lg transition border border-brand-200 font-semibold">
-               <Plus size={14} /> <span>Adicionar Vértice</span>
-             </button>
-          </div>
-          <div className="overflow-auto flex-1 custom-scrollbar">
-            <table className="w-full text-sm text-left border-collapse">
-              <thead className="text-xs text-slate-500 uppercase bg-slate-50 sticky top-0 z-10 font-semibold tracking-wide shadow-sm">
-                <tr>
-                  <th className="px-4 py-4 border-b border-slate-200 w-10 text-center">
-                      <button onClick={toggleSelectAll} className="text-slate-400 hover:text-brand-600">
-                          {selectedIds.size === points.length && points.length > 0 ? <CheckSquare size={16}/> : <Square size={16}/>}
-                      </button>
-                  </th>
-                  <th className="px-6 py-4 border-b border-slate-200">Vértice</th>
-                  <th className="px-6 py-4 border-b border-slate-200">Este (X)</th>
-                  <th className="px-6 py-4 border-b border-slate-200">Norte (Y)</th>
-                  <th className="px-6 py-4 border-b border-slate-200">Cota (Z)</th>
-                  <th className="px-6 py-4 border-b border-slate-200">Descrição</th>
-                  <th className="px-6 py-4 border-b border-slate-200 text-right">Ferramentas</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 font-mono text-sm">
-                {points.map((point: SurveyPoint, idx: number) => (
-                  <tr key={idx} className={`hover:bg-slate-50 transition-colors group ${selectedIds.has(point.id) ? 'bg-blue-50/50' : ''}`}>
-                    <td className="px-4 py-3 text-center">
-                        <button onClick={() => toggleSelect(point.id)} className={`${selectedIds.has(point.id) ? 'text-brand-600' : 'text-slate-300 hover:text-slate-500'}`}>
-                           {selectedIds.has(point.id) ? <CheckSquare size={16}/> : <Square size={16}/>}
-                        </button>
-                    </td>
-                    <td className="px-6 py-3">
-                      <input type="text" value={point.id} onChange={(e) => updatePoint(idx, 'id', e.target.value)} className="bg-transparent text-slate-900 font-bold focus:outline-none w-24 border-b-2 border-transparent focus:border-brand-500 transition-colors"/>
-                    </td>
-                    <td className="px-6 py-3">
-                      <input type="number" value={point.x} onChange={(e) => updatePoint(idx, 'x', parseFloat(e.target.value))} className="bg-transparent focus:outline-none w-32 text-slate-600 border-b-2 border-transparent focus:border-brand-500 transition-colors"/>
-                    </td>
-                    <td className="px-6 py-3">
-                      <input type="number" value={point.y} onChange={(e) => updatePoint(idx, 'y', parseFloat(e.target.value))} className="bg-transparent focus:outline-none w-32 text-slate-600 border-b-2 border-transparent focus:border-brand-500 transition-colors"/>
-                    </td>
-                    <td className="px-6 py-3">
-                      <input type="number" value={point.z} onChange={(e) => updatePoint(idx, 'z', parseFloat(e.target.value))} className="bg-transparent focus:outline-none w-20 text-slate-600 border-b-2 border-transparent focus:border-brand-500 transition-colors"/>
-                    </td>
-                    <td className="px-6 py-3">
-                      <input type="text" value={point.desc} onChange={(e) => updatePoint(idx, 'desc', e.target.value)} className="bg-transparent focus:outline-none w-full text-slate-500 italic border-b-2 border-transparent focus:border-brand-500 transition-colors"/>
-                    </td>
-                    <td className="px-6 py-3 text-right">
-                      <div className="flex items-center justify-end space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                         <button onClick={() => copyPoint(point)} title="Copiar Coordenadas" className="p-1.5 text-slate-400 hover:text-brand-600 hover:bg-brand-50 rounded-md"><ClipboardCheck size={16} /></button>
-                         <button onClick={() => flyToPoint(point)} title="Visualizar no Mapa" className="p-1.5 text-slate-400 hover:text-brand-600 hover:bg-brand-50 rounded-md"><Eye size={16} /></button>
-                         <div className="w-px h-4 bg-slate-200 mx-1"></div>
-                         <button onClick={() => removePoint(idx)} title="Remover" className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-md"><Trash2 size={16} /></button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const Input = ({ label, value, onChange, placeholder, error }: any) => (
-  <div>
-    <label className="block text-[11px] uppercase font-bold text-slate-400 mb-1.5 tracking-wider flex justify-between">
-        {label}
-        {error && <span className="text-red-500 normal-case tracking-normal font-medium">{error}</span>}
-    </label>
+// Helper for inputs
+const Input = ({ label, value, onChange, error, placeholder }: { label: string, value: string, onChange: (v: string) => void, error?: string, placeholder?: string }) => (
+  <div className="space-y-1">
+    <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide">{label}</label>
     <input 
-      type="text" 
-      value={value} 
+      className={`w-full px-3 py-2 border rounded-lg text-sm transition focus:ring-2 focus:ring-brand-200 focus:border-brand-500 outline-none ${error ? 'border-red-300 bg-red-50' : 'border-slate-300 bg-white'}`}
+      value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className={`w-full bg-slate-50 border rounded-lg px-3 py-2.5 text-sm text-slate-900 focus:ring-2 focus:outline-none transition placeholder-slate-400 font-medium ${error ? 'border-red-300 focus:border-red-500 focus:ring-red-100' : 'border-slate-300 focus:border-brand-500 focus:ring-brand-200'}`}
     />
+    {error && <span className="text-[10px] text-red-500 font-medium flex items-center gap-1"><AlertCircle size={10}/> {error}</span>}
   </div>
 );
 
-// --- Elevation Chart Component ---
-const ElevationProfile = ({ points }: { points: SurveyPoint[] }) => {
-  const chartData = useMemo(() => {
-    if (points.length < 2) return [];
-    let cumulativeDist = 0;
-    return points.map((p, i) => {
-        if (i > 0) {
-            const prev = points[i-1];
-            cumulativeDist += Math.sqrt(Math.pow(p.x - prev.x, 2) + Math.pow(p.y - prev.y, 2));
-        }
-        return { name: p.id, distance: parseFloat(cumulativeDist.toFixed(2)), elevation: p.z, desc: p.desc };
-    });
-  }, [points]);
+const NavBtn = ({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string }) => (
+  <button
+    onClick={onClick}
+    className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition ${
+      active
+        ? 'bg-brand-50 text-brand-700 shadow-sm ring-1 ring-brand-200'
+        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+    }`}
+  >
+    <div className={`${active ? 'text-brand-600' : 'text-slate-400'}`}>{icon}</div>
+    <span>{label}</span>
+    {active && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-brand-500"></div>}
+  </button>
+);
 
-  return (
-    <div className="h-full flex flex-col p-8 max-w-6xl mx-auto w-full">
-         <div className="mb-6 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-            <h2 className="text-xl font-bold text-slate-800 mb-1">Perfil Altimétrico</h2>
-            <p className="text-sm text-slate-500">Análise de variação de cota (Z) vs. Distância acumulada.</p>
-         </div>
-         <div className="flex-1 bg-white rounded-xl border border-slate-200 p-6 shadow-sm relative">
-            <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData} margin={{ top: 20, right: 30, left: 0, bottom: 20 }}>
-                    <defs>
-                        <linearGradient id="colorElev" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#2563eb" stopOpacity={0.2}/>
-                            <stop offset="95%" stopColor="#2563eb" stopOpacity={0}/>
-                        </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="distance" stroke="#94a3b8" label={{ value: 'Distância Acumulada (m)', position: 'insideBottom', offset: -10, fill: '#64748b' }} tick={{fill: '#475569', fontSize: 12}} />
-                    <YAxis dataKey="elevation" stroke="#94a3b8" label={{ value: 'Elevação (m)', angle: -90, position: 'insideLeft', fill: '#64748b' }} domain={['auto', 'auto']} tick={{fill: '#475569', fontSize: 12}} />
-                    <RechartsTooltip contentStyle={{ backgroundColor: '#fff', borderColor: '#e2e8f0', color: '#1e293b', borderRadius: '8px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} itemStyle={{ color: '#2563eb' }} labelStyle={{ color: '#64748b' }} />
-                    <Area type="monotone" dataKey="elevation" stroke="#2563eb" strokeWidth={3} fillOpacity={1} fill="url(#colorElev)" activeDot={{ r: 6, strokeWidth: 0, fill: '#1d4ed8' }} />
-                </AreaChart>
-            </ResponsiveContainer>
-            {chartData.length < 2 && (
-                <div className="absolute inset-0 flex items-center justify-center bg-white/50 backdrop-blur-sm rounded-xl">
-                    <p className="text-slate-400 flex items-center gap-2"><AlertCircle size={20}/> Adicione mais pontos para visualizar o perfil.</p>
+const DataEditor = ({ 
+    points, setPoints, metadata, setMetadata, validationErrors, exportCSV, flyToPoint, selectedIds, setSelectedIds 
+}: {
+    points: SurveyPoint[], setPoints: (p: SurveyPoint[]) => void, metadata: ProjectMetadata, setMetadata: (m: ProjectMetadata) => void, validationErrors: any, exportCSV: any, flyToPoint: any, selectedIds: Set<string>, setSelectedIds: (s: Set<string>) => void
+}) => {
+    const handlePointChange = (idx: number, field: keyof SurveyPoint, value: any) => {
+        const newPoints = [...points];
+        newPoints[idx] = { ...newPoints[idx], [field]: value };
+        setPoints(newPoints);
+    };
+
+    const toggleSelect = (id: string) => {
+        const newSet = new Set(selectedIds);
+        if (newSet.has(id)) newSet.delete(id);
+        else newSet.add(id);
+        setSelectedIds(newSet);
+    };
+
+    const deleteSelected = () => {
+        if(confirm('Tem certeza que deseja apagar os pontos selecionados?')) {
+            const newPoints = points.filter(p => !selectedIds.has(p.id));
+            setPoints(newPoints);
+            setSelectedIds(new Set());
+        }
+    }
+
+    return (
+        <div className="h-full flex flex-col bg-slate-50">
+            {/* Metadata Form */}
+            <div className="bg-white border-b border-slate-200 p-6 shadow-sm z-10">
+                <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
+                    <FileText size={16} className="text-brand-600"/> Metadados do Projeto
+                </h3>
+                <div className="grid grid-cols-4 gap-4">
+                    <Input label="Título do Projeto" value={metadata.title} onChange={(v) => setMetadata({...metadata, title: v})} error={validationErrors.title}/>
+                    <Input label="Proprietário" value={metadata.owner} onChange={(v) => setMetadata({...metadata, owner: v})} error={validationErrors.owner}/>
+                    <Input label="Localização" value={metadata.location} onChange={(v) => setMetadata({...metadata, location: v})} error={validationErrors.location}/>
+                    <Input label="Matrícula" value={metadata.registryId} onChange={(v) => setMetadata({...metadata, registryId: v})}/>
+                    <Input label="Resp. Técnico" value={metadata.professional} onChange={(v) => setMetadata({...metadata, professional: v})}/>
+                    <Input label="CREA" value={metadata.crea} onChange={(v) => setMetadata({...metadata, crea: v})}/>
+                    <Input label="Zona UTM" value={metadata.utmZone} onChange={(v) => setMetadata({...metadata, utmZone: v})} error={validationErrors.utmZone} placeholder="Ex: 23S"/>
                 </div>
-            )}
-         </div>
-    </div>
-  );
+            </div>
+
+            {/* Points Table Toolbar */}
+            <div className="bg-slate-100 border-b border-slate-200 px-6 py-2 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                    <span className="text-xs font-bold text-slate-500 uppercase">Tabela de Pontos</span>
+                    <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-[10px] font-bold">{points.length} Pontos</span>
+                </div>
+                <div className="flex items-center gap-2">
+                    {selectedIds.size > 0 && (
+                        <>
+                           <span className="text-xs text-brand-600 font-medium">{selectedIds.size} selecionados</span>
+                           <button onClick={deleteSelected} className="text-red-600 hover:bg-red-50 p-1.5 rounded transition" title="Apagar Selecionados"><Trash2 size={16}/></button>
+                           <button onClick={() => exportCSV(selectedIds)} className="text-brand-600 hover:bg-brand-50 p-1.5 rounded transition" title="Exportar CSV"><Download size={16}/></button>
+                        </>
+                    )}
+                    <button onClick={() => setPoints([...points, { id: `P${points.length+1}`, x: 0, y: 0, z: 0, desc: '' }])} className="flex items-center gap-1 bg-white border border-slate-300 text-slate-700 px-3 py-1.5 rounded text-xs font-bold hover:bg-slate-50 transition">
+                        <Plus size={14}/> <span>Adicionar</span>
+                    </button>
+                </div>
+            </div>
+
+            {/* Table */}
+            <div className="flex-1 overflow-auto p-0">
+                <table className="w-full text-sm text-left border-collapse">
+                    <thead className="text-xs text-slate-500 uppercase bg-slate-50 sticky top-0 z-10 shadow-sm">
+                        <tr>
+                            <th className="p-3 w-10 text-center"><input type="checkbox" checked={selectedIds.size === points.length && points.length > 0} onChange={(e) => setSelectedIds(e.target.checked ? new Set(points.map(p => p.id)) : new Set())}/></th>
+                            <th className="p-3 font-semibold w-24">ID</th>
+                            <th className="p-3 font-semibold">Este (X)</th>
+                            <th className="p-3 font-semibold">Norte (Y)</th>
+                            <th className="p-3 font-semibold">Cota (Z)</th>
+                            <th className="p-3 font-semibold">Descrição</th>
+                            <th className="p-3 font-semibold w-16 text-center">Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                        {points.map((p, i) => (
+                            <tr key={i} className={`hover:bg-slate-50 group transition ${selectedIds.has(p.id) ? 'bg-brand-50/50' : ''}`}>
+                                <td className="p-3 text-center"><input type="checkbox" checked={selectedIds.has(p.id)} onChange={() => toggleSelect(p.id)}/></td>
+                                <td className="p-3"><input className="w-full bg-transparent border-none focus:ring-0 p-0 font-medium text-slate-700" value={p.id} onChange={(e) => handlePointChange(i, 'id', e.target.value)} /></td>
+                                <td className="p-3"><input type="number" className="w-full bg-transparent border-none focus:ring-0 p-0 font-mono text-slate-600" value={p.x} onChange={(e) => handlePointChange(i, 'x', parseFloat(e.target.value))} /></td>
+                                <td className="p-3"><input type="number" className="w-full bg-transparent border-none focus:ring-0 p-0 font-mono text-slate-600" value={p.y} onChange={(e) => handlePointChange(i, 'y', parseFloat(e.target.value))} /></td>
+                                <td className="p-3"><input type="number" className="w-full bg-transparent border-none focus:ring-0 p-0 font-mono text-slate-600" value={p.z} onChange={(e) => handlePointChange(i, 'z', parseFloat(e.target.value))} /></td>
+                                <td className="p-3"><input className="w-full bg-transparent border-none focus:ring-0 p-0 text-slate-500" value={p.desc} onChange={(e) => handlePointChange(i, 'desc', e.target.value)} /></td>
+                                <td className="p-3 text-center">
+                                    <button onClick={() => flyToPoint(p)} className="text-slate-400 hover:text-brand-600 p-1 opacity-0 group-hover:opacity-100 transition"><Crosshair size={16}/></button>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+                {points.length === 0 && (
+                    <div className="flex flex-col items-center justify-center h-48 text-slate-400">
+                        <Layers size={32} className="mb-2 opacity-50"/>
+                        <p className="text-sm">Nenhum ponto registrado.</p>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
 };
 
-// --- 3D View Component ---
+const ElevationProfile = ({ points }: { points: SurveyPoint[] }) => {
+    const data = useMemo(() => {
+        let dist = 0;
+        return points.map((p, i) => {
+            if (i > 0) {
+                const prev = points[i-1];
+                dist += Math.sqrt(Math.pow(p.x - prev.x, 2) + Math.pow(p.y - prev.y, 2));
+            }
+            return { name: p.id, dist, z: p.z };
+        });
+    }, [points]);
 
-const CameraRig = ({ target, mode }: { target: SurveyPoint | null, mode: 'orbit' | 'top' | 'front' }) => {
-    const { camera, controls } = useThree();
-    const vec = new THREE.Vector3();
+    return (
+        <div className="h-full w-full p-6 flex flex-col">
+            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex-1 flex flex-col">
+                 <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2"><BarChartBig className="text-brand-600"/> Perfil Altimétrico</h3>
+                 <div className="flex-1 w-full min-h-0">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                            <defs>
+                                <linearGradient id="colorZ" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#2563eb" stopOpacity={0.1}/>
+                                    <stop offset="95%" stopColor="#2563eb" stopOpacity={0}/>
+                                </linearGradient>
+                            </defs>
+                            <XAxis dataKey="dist" tickFormatter={(v) => `${v.toFixed(0)}m`} stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
+                            <YAxis domain={['auto', 'auto']} stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(v) => `${v}m`}/>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0"/>
+                            <RechartsTooltip 
+                                contentStyle={{backgroundColor: '#1e293b', border: 'none', borderRadius: '8px', color: '#fff'}}
+                                itemStyle={{color: '#fff'}}
+                                formatter={(value: number) => [`${value.toFixed(2)} m`, 'Elevação']}
+                                labelFormatter={(label) => `Distância: ${parseFloat(label).toFixed(2)} m`}
+                            />
+                            <Area type="monotone" dataKey="z" stroke="#2563eb" strokeWidth={3} fillOpacity={1} fill="url(#colorZ)" activeDot={{r: 6, strokeWidth: 0}} />
+                        </AreaChart>
+                    </ResponsiveContainer>
+                 </div>
+            </div>
+        </div>
+    );
+};
 
-    useFrame(() => {
-        if (mode === 'top') {
-            camera.position.lerp(vec.set(0, 100, 0), 0.05);
-            (controls as any)?.target?.lerp(vec.set(0,0,0), 0.05);
-        } else if (mode === 'front') {
-            camera.position.lerp(vec.set(0, 0, 100), 0.05);
-            (controls as any)?.target?.lerp(vec.set(0,0,0), 0.05);
-        } else if (target) {
-            // "Fly to" logic (simplified relative to center since points are normalized in parent)
-            // We assume the parent View3D normalizes data so 0,0,0 is center
-            // But here target is raw. We need to normalize or rely on parent passing normalized pos.
-            // For simplicity, we just look at center if target is null, or look at target if set
-            // Note: In real app, coordinate conversion needed. Here we act as if mode switch triggers movement.
-        }
-        if (controls) (controls as any).update();
+const CameraRig = ({ points }: { points: SurveyPoint[] }) => {
+    // Basic camera sway or logic if needed
+    useFrame((state) => {
+       // Placeholder for future camera animations
     });
-
-    useEffect(() => {
-        if (target && controls) {
-             // Basic fly to effect by moving controls target
-             // NOTE: This assumes points in View3D are centered around 0,0,0 based on average.
-             // We'd need to calculate the relative position of 'target' vs 'average'.
-             // For this demo, we'll just reset camera to a nice angle.
-             camera.position.set(20, 20, 20);
-             (controls as any).target.set(0, 0, 0);
-        }
-    }, [target]);
-
     return null;
 }
 
 const View3D = ({ points }: { points: SurveyPoint[] }) => {
-  const [targetPoint, setTargetPoint] = useState<SurveyPoint | null>(null);
-  const [cameraMode, setCameraMode] = useState<'orbit' | 'top' | 'front'>('orbit');
+    // Calculate centroid to center the visualization
+    const centroid = useMemo(() => {
+        if (points.length === 0) return { x: 0, y: 0, z: 0 };
+        const xs = points.map(p => p.x);
+        const ys = points.map(p => p.y);
+        const zs = points.map(p => p.z);
+        return {
+            x: (Math.min(...xs) + Math.max(...xs)) / 2,
+            y: (Math.min(...ys) + Math.max(...ys)) / 2,
+            z: (Math.min(...zs) + Math.max(...zs)) / 2
+        };
+    }, [points]);
 
-  const normalizedData = useMemo(() => {
-    if (points.length === 0) return { center: [0,0,0], points: [] };
-    const avgX = points.reduce((s, p) => s + p.x, 0) / points.length;
-    const avgY = points.reduce((s, p) => s + p.y, 0) / points.length;
-    const avgZ = points.reduce((s, p) => s + p.z, 0) / points.length;
-    const normPoints = points.map(p => ({ ...p, pos: [p.x - avgX, p.z - avgZ, -(p.y - avgY)] as [number, number, number] }));
-    return { center: [avgX, avgY, avgZ], points: normPoints };
-  }, [points]);
+    const normalizedPoints = useMemo(() => {
+        return points.map(p => ({
+            ...p,
+            x: p.x - centroid.x,
+            y: p.y - centroid.y,
+            z: (p.z - centroid.z) * 2 // Exaggerate Z slightly
+        }));
+    }, [points, centroid]);
 
-  const linePoints = useMemo(() => {
-    if (normalizedData.points.length === 0) return [];
-    const pts = normalizedData.points.map(p => new THREE.Vector3(...p.pos));
-    pts.push(pts[0]);
-    return pts;
-  }, [normalizedData]);
-
-  const terrainGeometry = useMemo(() => {
-    if (normalizedData.points.length < 3) return null;
-    const geometry = new THREE.BufferGeometry();
-    const vertices = [];
-    const center = [0,0,0];
-    for(let i=0; i<normalizedData.points.length; i++) {
-        const p1 = normalizedData.points[i].pos;
-        const p2 = normalizedData.points[(i+1) % normalizedData.points.length].pos;
-        vertices.push(...center, ...p1, ...p2);
-    }
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-    geometry.computeVertexNormals();
-    return geometry;
-  }, [normalizedData]);
-
-  return (
-    <div className="w-full h-full relative bg-slate-900">
-      <Canvas camera={{ position: [50, 50, 50], fov: 45 }}>
-        <color attach="background" args={['#0f172a']} />
-        <ambientLight intensity={0.7} />
-        <directionalLight position={[10, 20, 5]} intensity={1.5} />
-        <OrbitControls makeDefault dampingFactor={0.1} />
-        <gridHelper args={[500, 50, '#334155', '#1e293b']} />
-        <CameraRig target={targetPoint} mode={cameraMode} />
-        {terrainGeometry && (
-            <mesh geometry={terrainGeometry} position={[0, -0.05, 0]}>
-                <meshStandardMaterial color="#1e293b" side={THREE.DoubleSide} opacity={0.8} transparent />
-            </mesh>
-        )}
-        {normalizedData.points.map((p, i) => (
-          <group key={i} position={p.pos}>
-            <mesh position={[0, -2.5, 0]}>
-              <cylinderGeometry args={[0.1, 0.1, 5]} />
-              <meshStandardMaterial color="#cbd5e1" />
-            </mesh>
-            <mesh>
-              <sphereGeometry args={[0.4]} />
-              <meshStandardMaterial color="#ef4444" />
-            </mesh>
-            <Html position={[0, 1.5, 0]} center>
-              <div className="bg-white/90 backdrop-blur px-2 py-1 rounded-md text-[10px] text-slate-900 border border-slate-200 shadow-lg font-bold whitespace-nowrap">
-                {p.id}
-              </div>
-            </Html>
-          </group>
-        ))}
-        {linePoints.length > 0 && <Line points={linePoints} color="#3b82f6" lineWidth={3} />}
-        <GizmoHelper alignment="bottom-right" margin={[80, 80]} onUpdate={() => {}}>
-            <GizmoViewport axisColors={['#ef4444', '#10b981', '#3b82f6']} labelColor="white" />
-        </GizmoHelper>
-      </Canvas>
-
-      {/* Advanced Camera Controls UI */}
-      <div className="absolute top-4 right-4 bg-white/10 backdrop-blur-md border border-white/20 p-2 rounded-lg flex flex-col gap-2 z-10">
-         <div className="flex gap-1">
-             <button onClick={() => setCameraMode('top')} className={`p-2 rounded hover:bg-white/20 text-white ${cameraMode === 'top' ? 'bg-white/20' : ''}`} title="Vista Superior">
-                 <GridIcon size={18}/>
-             </button>
-             <button onClick={() => setCameraMode('front')} className={`p-2 rounded hover:bg-white/20 text-white ${cameraMode === 'front' ? 'bg-white/20' : ''}`} title="Vista Frontal">
-                 <Video size={18}/>
-             </button>
-             <button onClick={() => setCameraMode('orbit')} className={`p-2 rounded hover:bg-white/20 text-white ${cameraMode === 'orbit' ? 'bg-white/20' : ''}`} title="Orbita Livre">
-                 <RotateCcw size={18}/>
-             </button>
-         </div>
-         <div className="h-px bg-white/10 my-1"></div>
-         <div className="relative">
-             <select 
-                onChange={(e) => {
-                    const pt = points.find(p => p.id === e.target.value);
-                    if (pt) {
-                        setTargetPoint(pt); 
-                        setCameraMode('orbit');
-                    }
-                }} 
-                className="w-full bg-slate-800 text-white text-xs p-2 rounded border border-slate-700 outline-none cursor-pointer"
-             >
-                 <option value="">Voar para ponto...</option>
-                 {points.map(p => <option key={p.id} value={p.id}>{p.id}</option>)}
-             </select>
-         </div>
-      </div>
-
-      <div className="absolute bottom-4 left-4 bg-white/90 p-4 rounded-lg border border-slate-200 shadow-xl text-xs text-slate-600 pointer-events-none z-10">
-        <p className="font-bold text-slate-900 mb-2 text-sm">Controles 3D</p>
-        <div className="space-y-1">
-          <p>Botão Esquerdo: <span className="font-semibold">Rotacionar</span></p>
-          <p>Botão Direito: <span className="font-semibold">Pan</span></p>
-          <p>Scroll: <span className="font-semibold">Zoom</span></p>
+    return (
+        <div className="w-full h-full bg-slate-900 relative">
+             <Canvas camera={{ position: [50, 50, 50], fov: 45 }}>
+                <ambientLight intensity={0.5} />
+                <pointLight position={[10, 10, 10]} intensity={1} />
+                <OrbitControls makeDefault />
+                <GizmoHelper alignment="bottom-right" margin={[80, 80]}>
+                    <GizmoViewport axisColors={['#9d4b4b', '#2f7f4f', '#3b5b9d']} labelColor="white" />
+                </GizmoHelper>
+                <gridHelper args={[200, 20]} position={[0, -10, 0]} />
+                
+                <group>
+                    {normalizedPoints.map((p, i) => (
+                        <group key={i} position={[p.x, p.z, -p.y]}> {/* Swap Y/Z for 3D view (Y is up in 3JS) */}
+                             <mesh>
+                                 <sphereGeometry args={[0.5, 16, 16]} />
+                                 <meshStandardMaterial color="#fbbf24" />
+                             </mesh>
+                             <Html distanceFactor={10}>
+                                 <div className="bg-black/50 text-white text-[10px] px-1 rounded backdrop-blur-sm whitespace-nowrap">
+                                     {p.id}
+                                 </div>
+                             </Html>
+                        </group>
+                    ))}
+                    {normalizedPoints.length > 1 && (
+                        <Line 
+                            points={normalizedPoints.map(p => [p.x, p.z, -p.y] as [number, number, number])} // Loop back?
+                            color="#3b82f6"
+                            lineWidth={2}
+                        />
+                    )}
+                    {/* Closing line */}
+                    {normalizedPoints.length > 2 && (
+                         <Line 
+                            points={[
+                                [normalizedPoints[normalizedPoints.length-1].x, normalizedPoints[normalizedPoints.length-1].z, -normalizedPoints[normalizedPoints.length-1].y],
+                                [normalizedPoints[0].x, normalizedPoints[0].z, -normalizedPoints[0].y]
+                            ] as [number, number, number][]}
+                            color="#3b82f6"
+                            lineWidth={2}
+                            dashed
+                            dashScale={2}
+                         />
+                    )}
+                </group>
+             </Canvas>
+             <div className="absolute bottom-4 left-4 text-white/50 text-xs font-mono pointer-events-none">
+                <div>Centróide: {centroid.x.toFixed(2)}, {centroid.y.toFixed(2)}</div>
+                <div>Z Exaggeration: 2x</div>
+                <div>Y-Up (Z do levantamento mapeado para Y do 3D)</div>
+             </div>
         </div>
-      </div>
-    </div>
-  );
+    );
 };
 
 // --- Map Component ---
@@ -1243,13 +1155,14 @@ interface SurveyMapProps {
   canRedo: boolean;
   openConfig: () => void;
   layerConfig: LayerConfig;
+  clearDrawing: () => void;
 }
 
 const SurveyMap = ({ 
   points, setPoints, annotations, setAnnotations,
   viewBox, setViewBox, mapStyle, setMapStyle, 
   selectedIds, setSelectedIds, undo, redo, canUndo, canRedo, 
-  openConfig, layerConfig
+  openConfig, layerConfig, clearDrawing
 }: SurveyMapProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [activeTool, setActiveTool] = useState<'select' | 'pan' | 'point' | 'polyline' | 'move' | 'delete' | 'measure' | 'area' | 'text'>('select');
@@ -1261,7 +1174,6 @@ const SurveyMap = ({
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [hoverPoint, setHoverPoint] = useState<SurveyPoint | null>(null);
-  const [selectionRect, setSelectionRect] = useState<{ startX: number, startY: number, endX: number, endY: number } | null>(null);
   
   // Measure State
   const [measureStart, setMeasureStart] = useState<{x: number, y: number} | null>(null);
@@ -1321,9 +1233,6 @@ const SurveyMap = ({
   const selectionPolygonStr = useMemo(() => {
       if (selectedIds.size < 3) return '';
       const selectedPoints = points.filter(p => selectedIds.has(p.id));
-      // Basic convex hull or just connection in order? 
-      // For survey, users usually select sequentially or expect sequential connection.
-      // We will just connect them in order of the array.
       return selectedPoints.map(p => {
           const { svgX, svgY } = toSvg(p.x, p.y);
           return `${svgX},${svgY}`;
@@ -1361,7 +1270,6 @@ const SurveyMap = ({
     }
 
     if (activeTool === 'move') {
-        // Find nearest point
         const snapDist = 20 * zoomFactor / transform.scale;
         const nearestIdx = points.findIndex(p => Math.sqrt(Math.pow(p.x - dataPos.x, 2) + Math.pow(p.y - dataPos.y, 2)) < snapDist);
         if (nearestIdx !== -1) {
@@ -1369,7 +1277,6 @@ const SurveyMap = ({
             setIsDragging(true);
             return;
         }
-        // Move annotation?
         const nearestAnnoIdx = annotations.findIndex(a => Math.sqrt(Math.pow(a.x - dataPos.x, 2) + Math.pow(a.y - dataPos.y, 2)) < snapDist);
         if (nearestAnnoIdx !== -1) {
             setMovingAnnotationIndex(nearestAnnoIdx);
@@ -1380,7 +1287,6 @@ const SurveyMap = ({
     }
 
     if (activeTool === 'select') {
-        // If clicking on a point, toggle selection.
         const snapDist = 20 * zoomFactor / transform.scale;
         const nearest = points.find(p => Math.sqrt(Math.pow(p.x - dataPos.x, 2) + Math.pow(p.y - dataPos.y, 2)) < snapDist);
         
@@ -1390,8 +1296,6 @@ const SurveyMap = ({
             else newSet.add(nearest.id);
             setSelectedIds(newSet);
         } else {
-            // Start selection rect
-            // Not fully implemented for rect drag logic in this snippet, defaulting to Pan behavior for empty space if not dragging rect
             setIsDragging(true);
             setDragStart({ x: e.clientX, y: e.clientY });
         }
@@ -1405,7 +1309,6 @@ const SurveyMap = ({
     const svgClickY = viewBox.y + (e.clientY - rect.top) * zoomFactor;
     const dataPos = fromSvg(svgClickX, svgClickY);
     
-    // Update Coordinate Display
     setCursorCoords({ x: dataPos.x, y: dataPos.y });
 
     if (activeTool === 'pan' && isDragging) {
@@ -1427,7 +1330,6 @@ const SurveyMap = ({
         }
     }
 
-    // Snapping Logic Helper
     let target = dataPos;
     if (snapEnabled) {
       const snapDist = 20 * zoomFactor / transform.scale;
@@ -1457,7 +1359,6 @@ const SurveyMap = ({
     const svgClickY = viewBox.y + (e.clientY - rect.top) * zoomFactor;
     let dataPos = fromSvg(svgClickX, svgClickY);
 
-    // Snapping Logic (Applied to Point, Measure, Area, etc.)
     if (snapEnabled) {
          const snapDist = 20 * zoomFactor / transform.scale;
          const nearest = points.find(p => Math.sqrt(Math.pow(p.x - dataPos.x, 2) + Math.pow(p.y - dataPos.y, 2)) < snapDist);
@@ -1482,7 +1383,7 @@ const SurveyMap = ({
                 y: dataPos.y, 
                 text, 
                 size: 12, 
-                color: '#000' 
+                color: layerConfig.theme === 'dark' ? '#FFF' : '#000' 
             }]);
             setActiveTool('select');
         }
@@ -1509,7 +1410,7 @@ const SurveyMap = ({
             setMeasureEnd(dataPos);
         } else {
             setMeasureEnd(dataPos);
-            setActiveTool('select'); // Finish measurement
+            setActiveTool('select');
         }
     }
   };
@@ -1530,14 +1431,11 @@ const SurveyMap = ({
      setActiveTool('select');
   };
 
-  // Clear area points when entering area tool
   useEffect(() => {
       if (activeTool === 'area') {
           setAreaPoints([]);
       }
   }, [activeTool]);
-
-  // --- Rendering Helpers ---
 
   const distance = useMemo(() => {
     if (measureStart && measureEnd) {
@@ -1595,45 +1493,49 @@ const SurveyMap = ({
       }
   };
 
+  const isDark = layerConfig.theme === 'dark';
+  const bgColor = isDark ? 'bg-slate-900' : 'bg-white';
+  const gridColor = isDark ? '#334155' : '#e2e8f0';
+  const textColor = isDark ? 'text-slate-300' : 'text-slate-600';
+
   return (
-    <div className={`w-full h-full relative overflow-hidden select-none flex flex-col ${mapStyle === 'tech' ? 'bg-white' : mapStyle === 'satellite' ? 'satellite-bg' : 'bg-slate-50'}`}>
+    <div className={`w-full h-full relative overflow-hidden select-none flex flex-col ${mapStyle === 'satellite' ? 'satellite-bg' : bgColor}`}>
       
       {/* Top Standard Toolbar */}
-      <div className="h-10 bg-slate-100 border-b border-slate-300 flex items-center px-2 shadow-sm z-20 gap-1">
-          <ToolbarBtn icon={<GridIcon size={16}/>} active={gridEnabled} onClick={() => setGridEnabled(!gridEnabled)} title="Grade (F7)" />
-          <ToolbarBtn icon={<Magnet size={16}/>} active={snapEnabled} onClick={() => setSnapEnabled(!snapEnabled)} title="Snap (F3)" />
-          <div className="w-px h-6 bg-slate-300 mx-1"></div>
-          <ToolbarBtn icon={<Undo size={16}/>} onClick={undo} disabled={!canUndo} title="Desfazer" />
-          <ToolbarBtn icon={<Redo size={16}/>} onClick={redo} disabled={!canRedo} title="Refazer" />
-          <div className="w-px h-6 bg-slate-300 mx-1"></div>
-          <ToolbarBtn icon={<Maximize size={16}/>} onClick={zoomExtents} title="Zoom Extents" />
-          <ToolbarBtn icon={<ZoomIn size={16}/>} onClick={() => {const f=0.8; setViewBox({...viewBox, x: viewBox.x+viewBox.w*(1-f)/2, y: viewBox.y+viewBox.h*(1-f)/2, w: viewBox.w*f, h: viewBox.h*f})}} title="Zoom In" />
-          <ToolbarBtn icon={<ZoomOut size={16}/>} onClick={() => {const f=1.2; setViewBox({...viewBox, x: viewBox.x+viewBox.w*(1-f)/2, y: viewBox.y+viewBox.h*(1-f)/2, w: viewBox.w*f, h: viewBox.h*f})}} title="Zoom Out" />
-          <div className="w-px h-6 bg-slate-300 mx-1"></div>
-          <div className="flex bg-white border border-slate-300 rounded overflow-hidden">
-             <button onClick={() => setMapStyle('tech')} className={`px-2 py-1 text-xs font-medium ${mapStyle === 'tech' ? 'bg-blue-100 text-blue-700' : 'text-slate-600 hover:bg-slate-50'}`}>Tech</button>
-             <button onClick={() => setMapStyle('satellite')} className={`px-2 py-1 text-xs font-medium ${mapStyle === 'satellite' ? 'bg-blue-100 text-blue-700' : 'text-slate-600 hover:bg-slate-50'}`}>Satélite</button>
+      <div className={`${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-slate-300'} h-10 border-b flex items-center px-2 shadow-sm z-20 gap-1`}>
+          <ToolbarBtn icon={<GridIcon size={16}/>} active={gridEnabled} onClick={() => setGridEnabled(!gridEnabled)} title="Grade (F7)" theme={layerConfig.theme}/>
+          <ToolbarBtn icon={<Magnet size={16}/>} active={snapEnabled} onClick={() => setSnapEnabled(!snapEnabled)} title="Snap (F3)" theme={layerConfig.theme}/>
+          <div className={`w-px h-6 mx-1 ${isDark ? 'bg-slate-600' : 'bg-slate-300'}`}></div>
+          <ToolbarBtn icon={<Undo size={16}/>} onClick={undo} disabled={!canUndo} title="Desfazer" theme={layerConfig.theme}/>
+          <ToolbarBtn icon={<Redo size={16}/>} onClick={redo} disabled={!canRedo} title="Refazer" theme={layerConfig.theme}/>
+          <div className={`w-px h-6 mx-1 ${isDark ? 'bg-slate-600' : 'bg-slate-300'}`}></div>
+          <ToolbarBtn icon={<Maximize size={16}/>} onClick={zoomExtents} title="Zoom Extents" theme={layerConfig.theme}/>
+          <ToolbarBtn icon={<ZoomIn size={16}/>} onClick={() => {const f=0.8; setViewBox({...viewBox, x: viewBox.x+viewBox.w*(1-f)/2, y: viewBox.y+viewBox.h*(1-f)/2, w: viewBox.w*f, h: viewBox.h*f})}} title="Zoom In" theme={layerConfig.theme}/>
+          <ToolbarBtn icon={<ZoomOut size={16}/>} onClick={() => {const f=1.2; setViewBox({...viewBox, x: viewBox.x+viewBox.w*(1-f)/2, y: viewBox.y+viewBox.h*(1-f)/2, w: viewBox.w*f, h: viewBox.h*f})}} title="Zoom Out" theme={layerConfig.theme}/>
+          <div className={`w-px h-6 mx-1 ${isDark ? 'bg-slate-600' : 'bg-slate-300'}`}></div>
+          <div className={`flex border rounded overflow-hidden ${isDark ? 'border-slate-600 bg-slate-800' : 'border-slate-300 bg-white'}`}>
+             <button onClick={() => setMapStyle('tech')} className={`px-2 py-1 text-xs font-medium ${mapStyle === 'tech' ? 'bg-brand-600 text-white' : isDark ? 'text-slate-400 hover:text-white' : 'text-slate-600 hover:bg-slate-50'}`}>Tech</button>
+             <button onClick={() => setMapStyle('satellite')} className={`px-2 py-1 text-xs font-medium ${mapStyle === 'satellite' ? 'bg-brand-600 text-white' : isDark ? 'text-slate-400 hover:text-white' : 'text-slate-600 hover:bg-slate-50'}`}>Satélite</button>
           </div>
       </div>
 
       <div className="flex-1 relative flex overflow-hidden">
          {/* Left Draw Toolbar */}
-         <div className="w-10 bg-slate-100 border-r border-slate-300 flex flex-col items-center py-2 gap-2 z-20 shadow-sm">
-             <ToolbarBtn icon={<MousePointer2 size={18}/>} active={activeTool === 'select'} onClick={() => setActiveTool('select')} title="Selecionar" />
-             <div className="w-6 h-px bg-slate-300"></div>
-             <ToolbarBtn icon={<Circle size={18}/>} active={activeTool === 'point'} onClick={() => setActiveTool('point')} title="Desenhar Ponto" />
-             <ToolbarBtn icon={<TypeIcon size={18}/>} active={activeTool === 'polyline'} onClick={() => setActiveTool('polyline')} title="Polilinha (Adicionar Pontos)" />
-             <ToolbarBtn icon={<Pentagon size={18}/>} active={activeTool === 'area'} onClick={() => setActiveTool('area')} title="Calcular Área" />
-             <ToolbarBtn icon={<TypeIcon size={18}/>} active={activeTool === 'text'} onClick={() => setActiveTool('text')} title="Texto / Anotação" />
-             <div className="w-6 h-px bg-slate-300"></div>
-             <ToolbarBtn icon={<Ruler size={18}/>} active={activeTool === 'measure'} onClick={() => { setActiveTool('measure'); setMeasureStart(null); setMeasureEnd(null); }} title="Medir Distância" />
-             <ToolbarBtn icon={<Hand size={18}/>} active={activeTool === 'pan'} onClick={() => setActiveTool('pan')} title="Pan (Mão)" />
+         <div className={`w-10 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-slate-300'} border-r flex flex-col items-center py-2 gap-2 z-20 shadow-sm`}>
+             <ToolbarBtn icon={<MousePointer2 size={18}/>} active={activeTool === 'select'} onClick={() => setActiveTool('select')} title="Selecionar" theme={layerConfig.theme}/>
+             <div className={`w-6 h-px ${isDark ? 'bg-slate-600' : 'bg-slate-300'}`}></div>
+             <ToolbarBtn icon={<Circle size={18}/>} active={activeTool === 'point'} onClick={() => setActiveTool('point')} title="Desenhar Ponto" theme={layerConfig.theme}/>
+             <ToolbarBtn icon={<TypeIcon size={18}/>} active={activeTool === 'polyline'} onClick={() => setActiveTool('polyline')} title="Polilinha (Adicionar Pontos)" theme={layerConfig.theme}/>
+             <ToolbarBtn icon={<Pentagon size={18}/>} active={activeTool === 'area'} onClick={() => setActiveTool('area')} title="Calcular Área" theme={layerConfig.theme}/>
+             <ToolbarBtn icon={<TypeIcon size={18}/>} active={activeTool === 'text'} onClick={() => setActiveTool('text')} title="Texto / Anotação" theme={layerConfig.theme}/>
+             <div className={`w-6 h-px ${isDark ? 'bg-slate-600' : 'bg-slate-300'}`}></div>
+             <ToolbarBtn icon={<Ruler size={18}/>} active={activeTool === 'measure'} onClick={() => { setActiveTool('measure'); setMeasureStart(null); setMeasureEnd(null); }} title="Medir Distância" theme={layerConfig.theme}/>
+             <ToolbarBtn icon={<Hand size={18}/>} active={activeTool === 'pan'} onClick={() => setActiveTool('pan')} title="Pan (Mão)" theme={layerConfig.theme}/>
          </div>
 
          {/* Canvas Area */}
-         <div className="flex-1 relative bg-white overflow-hidden">
-            {/* Grid Background */}
-            <div className={`absolute inset-0 ${gridEnabled && mapStyle === 'tech' ? 'grid-bg-light' : ''} pointer-events-none`}></div>
+         <div className={`flex-1 relative ${bgColor} overflow-hidden`}>
+            <div className={`absolute inset-0 ${gridEnabled && !isDark && mapStyle === 'tech' ? 'grid-bg-light' : gridEnabled && isDark && mapStyle === 'tech' ? 'grid-bg-dark' : ''} pointer-events-none`}></div>
 
             <div 
                 ref={containerRef}
@@ -1649,7 +1551,7 @@ const SurveyMap = ({
                 {/* Grid Lines */}
                 {gridLines.map((line, i) => (
                     <g key={`grid-${i}`}>
-                        <line x1={line.x1} y1={line.y1} x2={line.x2} y2={line.y2} stroke={mapStyle === 'satellite' ? '#ffffff30' : '#e2e8f0'} strokeWidth={1 * (viewBox.w / 1000)} vectorEffect="non-scaling-stroke"/>
+                        <line x1={line.x1} y1={line.y1} x2={line.x2} y2={line.y2} stroke={mapStyle === 'satellite' ? '#ffffff30' : gridColor} strokeWidth={1 * (viewBox.w / 1000)} vectorEffect="non-scaling-stroke"/>
                     </g>
                 ))}
                 
@@ -1687,7 +1589,7 @@ const SurveyMap = ({
                             className="transition-colors"
                         />
                         {layerConfig.showLabels && (
-                          <text x={svgX + r * 2} y={svgY} fontSize={12 * (viewBox.w / 1000)} className={`font-mono font-bold pointer-events-none ${mapStyle === 'satellite' ? 'fill-white' : 'fill-slate-700'}`} dy=".3em">{p.id}</text>
+                          <text x={svgX + r * 2} y={svgY} fontSize={12 * (viewBox.w / 1000)} className={`font-mono font-bold pointer-events-none ${mapStyle === 'satellite' ? 'fill-white' : isDark ? 'fill-slate-300' : 'fill-slate-700'}`} dy=".3em">{p.id}</text>
                         )}
                     </g>
                     );
@@ -1697,7 +1599,7 @@ const SurveyMap = ({
                 {annotations.map((a, i) => {
                     const { svgX, svgY } = toSvg(a.x, a.y);
                     return (
-                        <text key={a.id} x={svgX} y={svgY} fontSize={14 * (viewBox.w / 1000)} fill="black" textAnchor="middle" style={{ userSelect: 'none' }}>{a.text}</text>
+                        <text key={a.id} x={svgX} y={svgY} fontSize={14 * (viewBox.w / 1000)} fill={a.color || (isDark ? '#FFF' : '#000')} textAnchor="middle" style={{ userSelect: 'none' }}>{a.text}</text>
                     );
                 })}
 
@@ -1713,27 +1615,28 @@ const SurveyMap = ({
          </div>
 
          {/* Right Modify Toolbar */}
-         <div className="w-10 bg-slate-100 border-l border-slate-300 flex flex-col items-center py-2 gap-2 z-20 shadow-sm">
-             <ToolbarBtn icon={<Move size={18}/>} active={activeTool === 'move'} onClick={() => setActiveTool('move')} title="Mover Elemento" />
-             <ToolbarBtn icon={<Trash size={18}/>} active={activeTool === 'delete'} onClick={() => setActiveTool('delete')} title="Apagar (Delete)" />
-             <div className="w-6 h-px bg-slate-300"></div>
-             <ToolbarBtn icon={<Settings size={18}/>} onClick={openConfig} title="Configurações Visuais" />
+         <div className={`w-10 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-slate-300'} border-l flex flex-col items-center py-2 gap-2 z-20 shadow-sm`}>
+             <ToolbarBtn icon={<Move size={18}/>} active={activeTool === 'move'} onClick={() => setActiveTool('move')} title="Mover Elemento" theme={layerConfig.theme}/>
+             <ToolbarBtn icon={<Trash size={18}/>} active={activeTool === 'delete'} onClick={() => setActiveTool('delete')} title="Apagar (Delete)" theme={layerConfig.theme}/>
+             <div className={`w-6 h-px ${isDark ? 'bg-slate-600' : 'bg-slate-300'}`}></div>
+             <ToolbarBtn icon={<Eraser size={18}/>} onClick={() => { if(confirm('Limpar todo o desenho?')) clearDrawing(); }} title="Limpar Desenho" theme={layerConfig.theme}/>
+             <ToolbarBtn icon={<Settings size={18}/>} onClick={openConfig} title="Configurações Visuais" theme={layerConfig.theme}/>
          </div>
       </div>
 
       {/* Bottom Status Bar */}
-      <div className="h-8 bg-slate-100 border-t border-slate-300 flex items-center justify-between px-3 text-xs font-mono text-slate-600 select-none z-20">
+      <div className={`${isDark ? 'bg-slate-800 border-slate-700 text-slate-400' : 'bg-slate-100 border-slate-300 text-slate-600'} h-8 border-t flex items-center justify-between px-3 text-xs font-mono select-none z-20`}>
          <div className="flex items-center gap-4">
             <span className="w-32 truncate" title="Coordenadas do Cursor">
                {cursorCoords.x.toFixed(3)}, {cursorCoords.y.toFixed(3)}
             </span>
-            <div className="w-px h-4 bg-slate-300"></div>
-            <button className={`font-bold hover:bg-slate-200 px-1 rounded ${snapEnabled ? 'text-slate-900' : 'text-slate-400'}`} onClick={() => setSnapEnabled(!snapEnabled)}>SNAP</button>
-            <button className={`font-bold hover:bg-slate-200 px-1 rounded ${gridEnabled ? 'text-slate-900' : 'text-slate-400'}`} onClick={() => setGridEnabled(!gridEnabled)}>GRID</button>
+            <div className={`w-px h-4 ${isDark ? 'bg-slate-600' : 'bg-slate-300'}`}></div>
+            <button className={`font-bold hover:bg-opacity-20 px-1 rounded ${snapEnabled ? (isDark ? 'text-brand-400' : 'text-slate-900') : 'opacity-50'} hover:bg-slate-500`} onClick={() => setSnapEnabled(!snapEnabled)}>SNAP</button>
+            <button className={`font-bold hover:bg-opacity-20 px-1 rounded ${gridEnabled ? (isDark ? 'text-brand-400' : 'text-slate-900') : 'opacity-50'} hover:bg-slate-500`} onClick={() => setGridEnabled(!gridEnabled)}>GRID</button>
          </div>
          <div className="flex items-center gap-2">
             <span>Escala 1:{(1000 / viewBox.w * 100).toFixed(0)}</span>
-            <div className="w-px h-4 bg-slate-300"></div>
+            <div className={`w-px h-4 ${isDark ? 'bg-slate-600' : 'bg-slate-300'}`}></div>
             <span>{activeTool.toUpperCase()}</span>
          </div>
       </div>
@@ -1768,17 +1671,17 @@ const SurveyMap = ({
 
       {/* Selection Stats Overlay */}
       {selectionStats && activeTool === 'select' && (
-          <div className="absolute top-12 right-14 z-20 bg-white/90 backdrop-blur border border-slate-200 p-4 rounded-lg shadow-lg animate-in fade-in slide-in-from-right-2 max-w-xs">
-              <div className="text-sm font-bold text-slate-800 mb-2 border-b border-slate-100 pb-1">Seleção ({selectedIds.size} pts)</div>
+          <div className={`absolute top-12 right-14 z-20 backdrop-blur border p-4 rounded-lg shadow-lg animate-in fade-in slide-in-from-right-2 max-w-xs ${isDark ? 'bg-slate-800/90 border-slate-700 text-slate-200' : 'bg-white/90 border-slate-200 text-slate-800'}`}>
+              <div className={`text-sm font-bold mb-2 border-b pb-1 ${isDark ? 'border-slate-600' : 'border-slate-100'}`}>Seleção ({selectedIds.size} pts)</div>
               <div className="space-y-2">
                  <div>
-                    <span className="text-xs text-slate-500 uppercase font-bold">Área</span>
-                    <div className="text-sm font-mono text-slate-700">{(selectionStats.area / 10000).toFixed(4)} ha</div>
-                    <div className="text-xs font-mono text-slate-400">{(selectionStats.area).toFixed(2)} m²</div>
+                    <span className="text-xs uppercase font-bold opacity-60">Área</span>
+                    <div className="text-sm font-mono">{(selectionStats.area / 10000).toFixed(4)} ha</div>
+                    <div className="text-xs font-mono opacity-60">{(selectionStats.area).toFixed(2)} m²</div>
                  </div>
                  <div>
-                    <span className="text-xs text-slate-500 uppercase font-bold">Perímetro</span>
-                    <div className="text-sm font-mono text-slate-700">{selectionStats.perimeter.toFixed(2)} m</div>
+                    <span className="text-xs uppercase font-bold opacity-60">Perímetro</span>
+                    <div className="text-sm font-mono">{selectionStats.perimeter.toFixed(2)} m</div>
                  </div>
               </div>
           </div>
@@ -1788,9 +1691,24 @@ const SurveyMap = ({
   );
 };
 
-const ToolbarBtn = ({ icon, active, onClick, title, disabled }: any) => (
+const ToolbarBtn = ({ icon, active, onClick, title, disabled, theme }: any) => {
+    const isDark = theme === 'dark';
+    return (
     <button 
       onClick={onClick} 
       disabled={disabled}
       title={title}
-      className={`p-1.5 rounded-sm transition-all
+      className={`p-1.5 rounded-sm transition-all duration-100 border border-transparent
+        ${disabled ? 'opacity-30 cursor-not-allowed' : ''}
+        ${active 
+          ? (isDark ? 'bg-brand-900 text-brand-300 border-brand-700 shadow-inner' : 'bg-blue-100 text-blue-700 border-blue-300 shadow-inner')
+          : (isDark ? 'text-slate-400 hover:bg-slate-700 hover:border-slate-600 hover:text-slate-200' : 'text-slate-600 hover:bg-slate-200 hover:border-slate-300 hover:shadow-sm')
+        }
+      `}
+    >
+      {icon}
+    </button>
+)};
+
+const root = createRoot(document.getElementById('root')!);
+root.render(<App />);
