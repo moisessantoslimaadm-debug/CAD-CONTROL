@@ -1,1728 +1,1894 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
-import { GoogleGenAI, Type } from "@google/genai";
-import { Canvas, useThree, useFrame } from '@react-three/fiber';
-import { OrbitControls, Text, Html, Line, GizmoHelper, GizmoViewport } from '@react-three/drei';
-import * as THREE from 'three';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
+import { Canvas, useThree } from '@react-three/fiber';
+import { OrbitControls, Text, Html } from '@react-three/drei';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import { 
-  Map as MapIcon, FileText, Upload, Settings, Layers, Download, Plus, Trash2, Globe,
-  AlertCircle, Cpu, Move, ZoomIn, ZoomOut, Save, FolderOpen, Box, Ruler, Grid as GridIcon,
-  Copy, Crosshair, BarChartBig, Eye, MousePointer2, CheckSquare, Square, Hand, Circle,
-  Maximize, Magnet, Trash, Undo, Redo, Pentagon, Type as TypeIcon, Palette, FileUp, Eraser, Sun, Moon, Info, ChevronRight, CheckCircle2,
-  Filter, Image as ImageIcon, Disc, Calculator, GripVertical, PenTool, Keyboard, BoxSelect, History, FileJson, Clock, FileSpreadsheet
+  Hexagon, 
+  Map as MapIcon, 
+  Table2, 
+  Calculator, 
+  FileDown, 
+  Settings, 
+  Plus, 
+  Trash2, 
+  Upload, 
+  Search, 
+  Layers,
+  Ruler,
+  Eye,
+  EyeOff,
+  Copy,
+  LocateFixed,
+  Download,
+  Save,
+  Crosshair,
+  Box,
+  Palette,
+  Check,
+  X,
+  TrendingUp,
+  FileText,
+  Globe,
+  Mountain,
+  Component,
+  Maximize,
+  Edit2,
+  RefreshCw,
+  MoreVertical,
+  HelpCircle,
+  Scissors,
+  Magnet,
+  MousePointer2,
+  Grid,
+  Circle,
+  Square,
+  Calendar,
+  AlertCircle,
+  Triangle,
+  Move,
+  History,
+  FileOutput,
+  PenTool
 } from 'lucide-react';
+import './index.css';
 
 // --- Types ---
-interface SurveyPoint {
+interface Point {
   id: string;
-  x: number; y: number; z: number; desc: string;
-}
-interface MapAnnotation {
-  id: string; x: number; y: number; text: string; size: number; color: string;
-}
-interface SurveyPolygon {
-  id: string;
-  points: {x: number, y: number}[];
-  color: string;
-  area: number;
-  perimeter: number;
-  filled: boolean;
-}
-interface ProjectMetadata {
-  title: string; owner: string; location: string; registryId: string; professional: string; crea: string; utmZone: string;
-}
-interface MapViewBox {
-  x: number; y: number; w: number; h: number;
-}
-interface ColumnMapping {
-  id: number; x: number; y: number; z: number; desc: number; delimiter: string; name?: string;
-}
-interface LayerConfig {
-  pointColor: string; 
-  selectedColor: string; 
-  hoverColor: string;
-  lineColor: string; 
-  lineWidth: number; 
-  pointSize: number; 
-  showLabels: boolean; 
-  theme: 'light' | 'dark';
-  gridColor: string;
-  gridSpacing: number;
-}
-interface ToolTooltip {
   name: string;
-  description: string;
+  n: number; // North (Y)
+  e: number; // East (X)
+  z: number; // Elevation
+  desc: string;
+  date: string; // ISO Date string YYYY-MM-DD
 }
-interface ProjectSnapshot {
+
+interface SavedView {
+  id: string;
+  name: string;
+  zoom: number;
+  pan: { x: number, y: number };
+}
+
+interface ProjectVersion {
     id: string;
     name: string;
-    date: number;
-    data: {
-        points: SurveyPoint[];
-        annotations: MapAnnotation[];
-        polygons: SurveyPolygon[];
-        metadata: ProjectMetadata;
-    }
+    date: string;
+    points: Point[];
 }
 
-// --- Utils ---
-const calculateArea = (points: {x: number, y: number}[]) => {
-  if (points.length < 3) return 0;
-  let area = 0;
-  for (let i = 0; i < points.length; i++) {
-    const j = (i + 1) % points.length;
-    area += points[i].x * points[j].y;
-    area -= points[j].x * points[i].y;
-  }
-  return Math.abs(area) / 2;
-};
-const calculatePerimeter = (points: {x: number, y: number}[]) => {
-  if (points.length < 2) return 0;
-  let perimeter = 0;
-  for (let i = 0; i < points.length; i++) {
-    const j = (i + 1) % points.length;
-    const dx = points[j].x - points[i].x;
-    const dy = points[j].y - points[i].y;
-    perimeter += Math.sqrt(dx * dx + dy * dy);
-  }
-  return perimeter;
-};
-const calculateAzimuth = (p1: {x: number, y: number}, p2: {x: number, y: number}) => {
-    const dy = p2.y - p1.y;
-    const dx = p2.x - p1.x;
-    let theta = Math.atan2(dx, dy); // Azimuth from North (Y axis)
-    if (theta < 0) theta += 2 * Math.PI;
-    return (theta * 180) / Math.PI;
-};
-const toDMS = (deg: number) => {
-    const d = Math.floor(deg);
-    const m = Math.floor((deg - d) * 60);
-    const s = ((deg - d) * 60 - m) * 60;
-    return `${d}°${m.toString().padStart(2, '0')}'${s.toFixed(2).padStart(5, '0')}"`;
+interface LayerConfig {
+  color: string;
+  visible: boolean;
+}
+
+interface VisualSettings {
+  pointSize: number;
+  selectedColor: string;
+  hoverColor: string;
+  snapColor: string;
+}
+
+interface CsvMapping {
+  id: number;
+  name: number;
+  n: number;
+  e: number;
+  z: number;
+  desc: number;
+  separator: string;
+  hasHeader: boolean;
+}
+
+interface SnapSettings {
+  enabled: boolean;
+  vertices: boolean;
+  midpoints: boolean;
+  grid: boolean;
+  distance: number;
+}
+
+type ToolType = 'geodesia' | 'memorial' | 'reconstituicao' | 'modelagem' | 'curvas' | 'perfil' | 'secoes' | 'georref' | 'incra' | 'volume' | 'greide' | 'declividade' | 'plato' | null;
+
+// --- Mock Data ---
+const INITIAL_POINTS: Point[] = [
+  { id: '1', name: 'M-01', n: 7500123.456, e: 350123.456, z: 102.54, desc: 'Marco', date: '2023-10-01' },
+  { id: '2', name: 'C-01', n: 7500145.120, e: 350140.220, z: 103.10, desc: 'Cerca', date: '2023-10-02' },
+  { id: '3', name: 'C-02', n: 7500130.880, e: 350180.550, z: 101.80, desc: 'Cerca', date: '2023-10-02' },
+  { id: '4', name: 'P-01', n: 7500100.200, e: 350160.100, z: 102.00, desc: 'Poste', date: '2023-10-05' },
+  { id: '5', name: 'B-01', n: 7500090.500, e: 350130.800, z: 101.50, desc: 'Bordo', date: '2023-10-05' },
+  { id: '6', name: 'B-02', n: 7500080.120, e: 350110.400, z: 101.20, desc: 'Bordo', date: '2023-10-06' },
+  { id: '7', name: 'E-01', n: 7500110.330, e: 350090.900, z: 102.10, desc: 'Eixo', date: '2023-10-07' },
+  { id: '8', name: 'M-02', n: 7500155.000, e: 350110.000, z: 104.20, desc: 'Marco', date: '2023-10-08' },
+];
+
+// --- Utilities ---
+const normalize = (val: number, min: number, range: number, size: number, padding: number) => {
+  return ((val - min) / range) * (size - padding * 2) + padding;
 };
 
-// --- App Component ---
-const App = () => {
-  const [activeTab, setActiveTab] = useState<'map' | 'data' | 'memorial' | '3d' | 'charts'>('map');
-  
-  // State
-  const [points, setPoints] = useState<SurveyPoint[]>([
-    { id: 'M-01', x: 250100.500, y: 7450100.200, z: 750.00, desc: 'Marco' },
-    { id: 'M-02', x: 250250.000, y: 7450120.500, z: 752.10, desc: 'Cerca' },
-    { id: 'M-03', x: 250280.300, y: 7449980.100, z: 748.50, desc: 'Vértice' },
-    { id: 'M-04', x: 250090.100, y: 7449950.000, z: 749.20, desc: 'Estrada' },
-  ]);
-  const [annotations, setAnnotations] = useState<MapAnnotation[]>([]);
-  const [polygons, setPolygons] = useState<SurveyPolygon[]>([]);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set()); // Covers Points, Annos, Polygons
-  
-  // History
-  const [history, setHistory] = useState<{points: SurveyPoint[], annotations: MapAnnotation[], polygons: SurveyPolygon[]}[]>([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
+const denormalize = (val: number, min: number, range: number, size: number, padding: number) => {
+    return ((val - padding) / (size - padding * 2)) * range + min;
+};
 
-  // Layer Config
-  const [layerConfig, setLayerConfig] = useState<LayerConfig>({
-    pointColor: '#06b6d4', 
-    selectedColor: '#f59e0b',
-    hoverColor: '#ffffff',
-    lineColor: '#52525b',
-    lineWidth: 1,
-    pointSize: 4,
-    showLabels: true,
-    theme: 'dark',
-    gridColor: '', // Empty means default based on theme
-    gridSpacing: 50
-  });
+// Vector math for projection
+const projectPointOnSegment = (px: number, py: number, ax: number, ay: number, bx: number, by: number) => {
+    const atob = { x: bx - ax, y: by - ay };
+    const atop = { x: px - ax, y: py - ay };
+    const len = atob.x * atob.x + atob.y * atob.y;
+    let dot = atop.x * atob.x + atop.y * atob.y;
+    const t = Math.min(1, Math.max(0, dot / len));
+    return {
+        x: ax + atob.x * t,
+        y: ay + atob.y * t,
+        t: t // fraction along the segment
+    };
+};
 
-  const [metadata, setMetadata] = useState<ProjectMetadata>({
-    title: 'Projeto Topográfico Alpha', owner: 'Cliente Exemplo', location: 'São Paulo, SP', registryId: '', professional: '', crea: '', utmZone: '23S'
-  });
-  const [viewBox, setViewBox] = useState<MapViewBox>({ x: 0, y: 0, w: 1000, h: 1000 });
-  const [mapStyle, setMapStyle] = useState<'tech' | 'satellite' | 'clean'>('tech');
-  
-  // Modals
-  const [showImportModal, setShowImportModal] = useState(false);
-  const [showConfigModal, setShowConfigModal] = useState(false);
-  const [showVersionModal, setShowVersionModal] = useState(false);
+const fakeGeoConvert = (n: number, e: number) => {
+     // Simplified conversion for KML demo
+     const lat = -23.5 - (n - 7000000) / 100000;
+     const long = -46.6 - (e - 300000) / 100000;
+     return { lat, long };
+}
 
-  // History Logic
+const isValidCoordinate = (val: any) => {
+    const num = parseFloat(val);
+    return !isNaN(num) && isFinite(num);
+};
+
+// Ranges for UTM Zone 22/23S approx for validation example
+const isValidNorth = (n: number) => n > 6000000 && n < 10000000; 
+const isValidEast = (e: number) => e > 100000 && e < 900000;
+
+// --- Sub-Components ---
+
+const ModalWindow = ({ title, icon: Icon, onClose, children }: { title: string, icon: any, onClose: () => void, children?: React.ReactNode }) => (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+    <div className="bg-[#18181b] w-full max-w-2xl max-h-[90vh] rounded-xl border border-white/10 shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+      <div className="flex items-center justify-between p-4 border-b border-white/10 bg-[#27272a]">
+        <div className="flex items-center gap-2 text-white font-bold">
+          <Icon className="text-cad-accent" size={20} />
+          {title}
+        </div>
+        <button onClick={onClose} className="p-1 text-zinc-400 hover:text-white hover:bg-white/10 rounded transition-colors">
+          <X size={20} />
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-6 text-zinc-300">
+        {children}
+      </div>
+    </div>
+  </div>
+);
+
+const AutoCADTooltip = ({ title, desc, children }: { title: string, desc: string, children?: React.ReactNode }) => {
+    return (
+        <div className="relative group/tooltip">
+            {children}
+            <div className="absolute left-1/2 -translate-x-1/2 top-full mt-2 w-48 opacity-0 group-hover/tooltip:opacity-100 transition-opacity duration-200 pointer-events-none z-[60]">
+                <div className="bg-[#27272a] border border-white/10 p-3 rounded shadow-xl">
+                    <div className="text-white text-xs font-bold mb-1">{title}</div>
+                    <div className="text-zinc-400 text-[10px] leading-tight">{desc}</div>
+                </div>
+                {/* Arrow */}
+                <div className="absolute left-1/2 -translate-x-1/2 -top-1 border-l-4 border-r-4 border-b-4 border-l-transparent border-r-transparent border-b-[#27272a]"></div>
+            </div>
+        </div>
+    )
+}
+
+const ResizableHeader = ({ 
+  label, 
+  width, 
+  onResize, 
+  align = 'left' 
+}: { 
+  label: string, 
+  width: number, 
+  onResize: (w: number) => void,
+  align?: 'left' | 'right' | 'center'
+}) => {
+  const [isResizing, setIsResizing] = useState(false);
+  const startX = useRef(0);
+  const startWidth = useRef(0);
+
   useEffect(() => {
-    if (history.length === 0) {
-        setHistory([{ points, annotations, polygons }]);
-        setHistoryIndex(0);
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isResizing) {
+        const diff = e.clientX - startX.current;
+        onResize(Math.max(50, startWidth.current + diff));
+      }
+    };
+    const handleMouseUp = () => setIsResizing(false);
+
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
     }
-  }, []);
-
-  const updateStateWithHistory = (newPoints: SurveyPoint[], newAnnotations: MapAnnotation[] = annotations, newPolygons: SurveyPolygon[] = polygons) => {
-      const currentEntry = { points: newPoints, annotations: newAnnotations, polygons: newPolygons };
-      const newHistory = history.slice(0, historyIndex + 1);
-      newHistory.push(currentEntry);
-      if (newHistory.length > 50) newHistory.shift();
-      setHistory(newHistory);
-      setHistoryIndex(newHistory.length - 1);
-      setPoints(newPoints);
-      setAnnotations(newAnnotations);
-      setPolygons(newPolygons);
-  };
-
-  const undo = () => {
-      if (historyIndex > 0) {
-          const prevIndex = historyIndex - 1;
-          const entry = history[prevIndex];
-          setPoints(entry.points);
-          setAnnotations(entry.annotations);
-          setPolygons(entry.polygons);
-          setHistoryIndex(prevIndex);
-      }
-  };
-
-  const redo = () => {
-      if (historyIndex < history.length - 1) {
-          const nextIndex = historyIndex + 1;
-          const entry = history[nextIndex];
-          setPoints(entry.points);
-          setAnnotations(entry.annotations);
-          setPolygons(entry.polygons);
-          setHistoryIndex(nextIndex);
-      }
-  };
-
-  // CSV Import Helpers
-  const [importText, setImportText] = useState('');
-  const [manualMapping, setManualMapping] = useState<ColumnMapping>({ id: 0, x: 1, y: 2, z: 3, desc: 4, delimiter: ',' });
-  const [savedMappings, setSavedMappings] = useState<ColumnMapping[]>([]);
-
-  useEffect(() => {
-      const saved = localStorage.getItem('geoProMappings');
-      if (saved) {
-          setSavedMappings(JSON.parse(saved));
-      }
-  }, []);
-
-  const saveMapping = () => {
-      const name = prompt("Nome da configuração de mapeamento:");
-      if (name) {
-          const newMapping = { ...manualMapping, name };
-          const newMappings = [...savedMappings, newMapping];
-          setSavedMappings(newMappings);
-          localStorage.setItem('geoProMappings', JSON.stringify(newMappings));
-      }
-  };
-
-  const handleManualImport = () => {
-      if (!importText.trim()) return;
-      try {
-         const lines = importText.trim().split('\n');
-         const newPoints: SurveyPoint[] = [];
-         
-         lines.forEach((line, index) => {
-            if (line.trim() === '') return;
-            let cols: string[];
-            if (manualMapping.delimiter === 'tab') cols = line.split('\t');
-            else if (manualMapping.delimiter === 'space') cols = line.trim().split(/\s+/);
-            else cols = line.split(manualMapping.delimiter);
-  
-            cols = cols.map(c => c.replace(/^"|"$/g, '').trim());
-            if (cols.length < 3) return; 
-  
-            const p: SurveyPoint = {
-               id: cols[manualMapping.id] || `P${points.length + index + 1}`,
-               x: parseFloat(cols[manualMapping.x]) || 0,
-               y: parseFloat(cols[manualMapping.y]) || 0,
-               z: parseFloat(cols[manualMapping.z]) || 0,
-               desc: cols[manualMapping.desc] || ''
-            };
-            
-            if (!isNaN(p.x) && !isNaN(p.y)) newPoints.push(p);
-         });
-  
-         updateStateWithHistory([...points, ...newPoints]);
-         setShowImportModal(false);
-         setImportText('');
-         alert(`${newPoints.length} pontos importados.`);
-      } catch (e) {
-         alert("Erro na importação. Verifique o mapeamento.");
-      }
-  };
-
-  // KML Export
-  const exportKML = () => {
-      let kml = `<?xml version="1.0" encoding="UTF-8"?>
-<kml xmlns="http://www.opengis.net/kml/2.2">
-  <Document>
-    <name>${metadata.title || "Projeto Topográfico"}</name>
-    <description>Exportado via GeoPro CAD</description>
-    <Style id="pointStyle">
-      <IconStyle><scale>1.0</scale></IconStyle>
-    </Style>
-    <Style id="polyStyle">
-      <LineStyle><color>ff0000ff</color><width>2</width></LineStyle>
-      <PolyStyle><color>400000ff</color></PolyStyle>
-    </Style>
-`;
-      // Points
-      points.forEach(p => {
-          kml += `    <Placemark>
-      <name>${p.id}</name>
-      <description>${p.desc}</description>
-      <styleUrl>#pointStyle</styleUrl>
-      <Point><coordinates>${p.x},${p.y},${p.z}</coordinates></Point>
-    </Placemark>\n`;
-      });
-      // Polygons
-      polygons.forEach(poly => {
-          const coordStr = poly.points.map(pt => `${pt.x},${pt.y},0`).join(' ');
-          kml += `    <Placemark>
-      <name>${poly.id}</name>
-      <styleUrl>#polyStyle</styleUrl>
-      <Polygon>
-        <outerBoundaryIs>
-          <LinearRing><coordinates>${coordStr} ${poly.points[0].x},${poly.points[0].y},0</coordinates></LinearRing>
-        </outerBoundaryIs>
-      </Polygon>
-    </Placemark>\n`;
-      });
-
-      kml += `  </Document>\n</kml>`;
-      
-      const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${metadata.title || 'projeto'}.kml`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-  };
-
-  // JSON Export
-  const exportJSON = () => {
-      const projectData = {
-          metadata,
-          points,
-          annotations,
-          polygons,
-          layerConfig,
-          version: "1.0"
-      };
-      const jsonStr = JSON.stringify(projectData, null, 2);
-      const blob = new Blob([jsonStr], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${metadata.title || 'projeto'}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-  };
-
-  // Snapshots Logic
-  const loadSnapshot = (snapshot: ProjectSnapshot) => {
-      if(confirm(`Carregar versão "${snapshot.name}"? O estado atual não salvo será perdido.`)) {
-          setPoints(snapshot.data.points);
-          setAnnotations(snapshot.data.annotations);
-          setPolygons(snapshot.data.polygons);
-          setMetadata(snapshot.data.metadata);
-          updateStateWithHistory(snapshot.data.points, snapshot.data.annotations, snapshot.data.polygons);
-          setShowVersionModal(false);
-      }
-  };
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing, onResize]);
 
   return (
-    <div className={`flex h-screen w-full font-sans overflow-hidden ${layerConfig.theme === 'dark' ? 'bg-cad-bg text-cad-text' : 'bg-slate-50 text-slate-800'}`}>
-      
-      {/* Sidebar - Pro Look */}
-      <aside className={`w-64 border-r flex flex-col z-30 shadow-xl ${layerConfig.theme === 'dark' ? 'bg-cad-panel border-cad-border' : 'bg-white border-slate-200'}`}>
-        <div className="h-14 flex items-center px-4 border-b border-inherit">
-          <Globe className="h-5 w-5 text-cad-accent mr-2" />
-          <span className="font-bold text-lg tracking-tight">GeoPro <span className="text-[10px] uppercase text-cad-accent tracking-widest bg-cad-accent/10 px-1 rounded">CAD</span></span>
+    <th className="relative p-4 border-b border-white/10 select-none group" style={{ width, textAlign: align }}>
+      <span className="relative z-10">{label}</span>
+      <div 
+        className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-cad-accent transition-colors z-20"
+        onMouseDown={(e) => {
+          setIsResizing(true);
+          startX.current = e.clientX;
+          startWidth.current = width;
+        }}
+      />
+    </th>
+  );
+};
+
+// 1. Geodésia Tool
+const GeodesiaTool = ({ points }: { points: Point[] }) => {
+  const [selectedPoint, setSelectedPoint] = useState(points[0].id);
+  const p = points.find(pt => pt.id === selectedPoint) || points[0];
+  const { lat, long } = fakeGeoConvert(p.n, p.e);
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <label className="text-xs font-bold text-zinc-500 uppercase">Ponto de Origem</label>
+          <select 
+            className="w-full bg-zinc-900 border border-white/10 rounded-lg p-3 text-white focus:border-cad-accent outline-none"
+            value={selectedPoint}
+            onChange={(e) => setSelectedPoint(e.target.value)}
+          >
+            {points.map(pt => <option key={pt.id} value={pt.id}>{pt.name}</option>)}
+          </select>
         </div>
-
-        <nav className="flex-1 p-2 space-y-1 overflow-y-auto">
-          <div className="px-2 py-2 text-[10px] font-bold uppercase tracking-wider opacity-50">Módulos</div>
-          <NavBtn active={activeTab === 'map'} onClick={() => setActiveTab('map')} icon={<MapIcon size={18} />} label="Model Space (Mapa)" theme={layerConfig.theme} />
-          <NavBtn active={activeTab === 'data'} onClick={() => setActiveTab('data')} icon={<Layers size={18} />} label="Data Table" theme={layerConfig.theme} />
-          <NavBtn active={activeTab === '3d'} onClick={() => setActiveTab('3d')} icon={<Box size={18} />} label="Visualização 3D" theme={layerConfig.theme} />
-          <NavBtn active={activeTab === 'charts'} onClick={() => setActiveTab('charts')} icon={<BarChartBig size={18} />} label="Análise/Perfil" theme={layerConfig.theme} />
-          <NavBtn active={activeTab === 'memorial'} onClick={() => setActiveTab('memorial')} icon={<FileText size={18} />} label="Relatórios" theme={layerConfig.theme} />
-        </nav>
-
-        <div className="p-3 border-t border-inherit bg-opacity-50">
-           <button onClick={() => setShowImportModal(true)} className="w-full mb-2 bg-cad-accent text-white py-2 rounded text-xs font-bold hover:brightness-110 flex items-center justify-center gap-2"><Upload size={14}/> IMPORTAR DADOS</button>
-           <div className={`rounded-lg p-3 ${layerConfig.theme === 'dark' ? 'bg-black/20' : 'bg-slate-100'}`}>
-             <div className="flex justify-between text-xs mb-1">
-               <span className="opacity-70">Pontos</span>
-               <span className="font-mono font-bold text-cad-accent">{points.length}</span>
-             </div>
-             <div className="flex justify-between text-xs mb-1">
-               <span className="opacity-70">Polígonos</span>
-               <span className="font-mono font-bold">{polygons.length}</span>
-             </div>
-           </div>
+        <div className="space-y-2">
+          <label className="text-xs font-bold text-zinc-500 uppercase">Datum de Saída</label>
+          <select className="w-full bg-zinc-900 border border-white/10 rounded-lg p-3 text-white focus:border-cad-accent outline-none">
+            <option>SIRGAS 2000</option>
+            <option>WGS 84</option>
+            <option>SAD 69</option>
+          </select>
         </div>
-      </aside>
+      </div>
 
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col relative min-w-0">
-        <header className={`h-14 border-b flex items-center justify-between px-6 z-20 ${layerConfig.theme === 'dark' ? 'bg-cad-panel border-cad-border' : 'bg-white border-slate-200'}`}>
-           <div className="flex items-center gap-4">
-              <h1 className="font-semibold text-sm">{metadata.title}</h1>
-              <div className={`h-4 w-px ${layerConfig.theme === 'dark' ? 'bg-white/10' : 'bg-slate-300'}`}></div>
-              <span className="text-xs opacity-60 font-mono">{metadata.location}</span>
-           </div>
-           <div className="flex items-center space-x-2">
-             <button onClick={() => setShowVersionModal(true)} className={`p-2 rounded hover:bg-black/10 transition text-xs flex items-center gap-2 ${layerConfig.theme === 'dark' ? 'text-cad-text' : 'text-slate-600'}`}>
-                <Clock size={14}/> Versões
-             </button>
-             <button onClick={exportJSON} className={`p-2 rounded hover:bg-black/10 transition text-xs flex items-center gap-2 ${layerConfig.theme === 'dark' ? 'text-cad-text' : 'text-slate-600'}`}>
-                <FileJson size={14}/> Export Project
-             </button>
-             <button onClick={exportKML} className={`p-2 rounded hover:bg-black/10 transition text-xs flex items-center gap-2 ${layerConfig.theme === 'dark' ? 'text-cad-text' : 'text-slate-600'}`}>
-                <Download size={14}/> Export KML
-             </button>
-             <button onClick={() => setShowConfigModal(true)} className={`p-2 rounded hover:bg-black/10 transition text-xs flex items-center gap-2 ${layerConfig.theme === 'dark' ? 'text-cad-text' : 'text-slate-600'}`}>
-                <Settings size={14}/> Config
-             </button>
-           </div>
-        </header>
-
-        <div className="flex-1 relative overflow-hidden">
-          {activeTab === 'map' && (
-            <SurveyMap 
-              points={points} setPoints={setPoints}
-              annotations={annotations} setAnnotations={setAnnotations}
-              polygons={polygons} setPolygons={setPolygons}
-              viewBox={viewBox} setViewBox={setViewBox}
-              mapStyle={mapStyle} setMapStyle={setMapStyle}
-              selectedIds={selectedIds} setSelectedIds={setSelectedIds}
-              undo={undo} redo={redo} canUndo={historyIndex > 0} canRedo={historyIndex < history.length - 1}
-              openConfig={() => setShowConfigModal(true)}
-              layerConfig={layerConfig}
-              clearDrawing={() => updateStateWithHistory([], [])}
-              pushHistory={updateStateWithHistory}
-            />
-          )}
-          {activeTab === 'data' && <DataEditor points={points} setPoints={(pts:any) => updateStateWithHistory(pts)} metadata={metadata} setMetadata={setMetadata} selectedIds={selectedIds} setSelectedIds={setSelectedIds} theme={layerConfig.theme} />}
-          {activeTab === '3d' && <View3D points={points} theme={layerConfig.theme} />}
-          {activeTab === 'charts' && <ElevationProfile points={points} theme={layerConfig.theme} />}
-          {activeTab === 'memorial' && (
-              <MemorialGenerator 
-                  metadata={metadata} 
-                  points={points} 
-                  polygons={polygons} 
-                  selectedIds={selectedIds} 
-                  theme={layerConfig.theme}
-              />
-          )}
+      <div className="bg-zinc-900/50 p-4 rounded-xl border border-white/5 space-y-4">
+        <div className="flex justify-between items-center border-b border-white/5 pb-2">
+          <span className="text-sm font-medium">Coordenadas UTM (Origem)</span>
         </div>
-      </main>
-
-       {/* Configuration Modal */}
-       {showConfigModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-              <div className={`rounded-lg w-full max-w-sm shadow-2xl p-6 border animate-in fade-in zoom-in-95 ${layerConfig.theme === 'dark' ? 'bg-cad-panel border-cad-border text-cad-text' : 'bg-white border-slate-200 text-slate-900'}`}>
-                  <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Palette size={20} className="text-cad-accent"/> Aparência</h3>
-                  <div className="space-y-4">
-                      <div className="grid grid-cols-2 gap-2">
-                            <button onClick={() => setLayerConfig({...layerConfig, theme: 'light'})} className={`py-2 text-xs font-medium rounded border transition flex items-center justify-center gap-2 ${layerConfig.theme === 'light' ? 'bg-white border-cad-accent text-cad-accent' : 'bg-black/5'}`}><Sun size={14}/> Paper Space</button>
-                            <button onClick={() => setLayerConfig({...layerConfig, theme: 'dark'})} className={`py-2 text-xs font-medium rounded border transition flex items-center justify-center gap-2 ${layerConfig.theme === 'dark' ? 'bg-cad-bg border-cad-accent text-cad-accent' : 'bg-white/5'}`}><Moon size={14}/> Model Space</button>
-                      </div>
-                      
-                      <div className="space-y-2 pt-2 border-t border-inherit border-opacity-20">
-                          <label className="text-xs font-bold opacity-60 uppercase block">Cores</label>
-                          <div className="grid grid-cols-3 gap-2">
-                             <div>
-                                 <label className="text-[10px] opacity-50 block mb-1">Padrão</label>
-                                 <input type="color" value={layerConfig.pointColor} onChange={(e) => setLayerConfig({...layerConfig, pointColor: e.target.value})} className="w-full h-8 rounded cursor-pointer bg-transparent border border-inherit"/>
-                             </div>
-                             <div>
-                                 <label className="text-[10px] opacity-50 block mb-1">Seleção</label>
-                                 <input type="color" value={layerConfig.selectedColor} onChange={(e) => setLayerConfig({...layerConfig, selectedColor: e.target.value})} className="w-full h-8 rounded cursor-pointer bg-transparent border border-inherit"/>
-                             </div>
-                             <div>
-                                 <label className="text-[10px] opacity-50 block mb-1">Hover</label>
-                                 <input type="color" value={layerConfig.hoverColor} onChange={(e) => setLayerConfig({...layerConfig, hoverColor: e.target.value})} className="w-full h-8 rounded cursor-pointer bg-transparent border border-inherit"/>
-                             </div>
-                          </div>
-                      </div>
-
-                      <div className="space-y-2 pt-2 border-t border-inherit border-opacity-20">
-                           <label className="text-xs font-bold opacity-60 uppercase block">Grade (Grid)</label>
-                           <div className="grid grid-cols-2 gap-2">
-                               <div>
-                                   <label className="text-[10px] opacity-50 block mb-1">Cor</label>
-                                   <input type="color" value={layerConfig.gridColor || (layerConfig.theme === 'dark' ? '#333333' : '#e2e8f0')} onChange={(e) => setLayerConfig({...layerConfig, gridColor: e.target.value})} className="w-full h-8 rounded cursor-pointer bg-transparent border border-inherit"/>
-                               </div>
-                               <div>
-                                   <label className="text-[10px] opacity-50 block mb-1">Espaçamento</label>
-                                   <input type="number" min="10" max="500" value={layerConfig.gridSpacing} onChange={(e) => setLayerConfig({...layerConfig, gridSpacing: parseInt(e.target.value)})} className="w-full h-8 px-2 rounded bg-transparent border border-inherit text-xs"/>
-                               </div>
-                           </div>
-                      </div>
-
-                      <div className="pt-2 border-t border-inherit border-opacity-20">
-                          <div className="flex justify-between mb-1">
-                             <label className="text-xs font-bold opacity-60 uppercase">Tamanho do Ponto</label>
-                             <span className="text-xs font-mono">{layerConfig.pointSize}px</span>
-                          </div>
-                          <input type="range" min="1" max="15" value={layerConfig.pointSize} onChange={(e) => setLayerConfig({...layerConfig, pointSize: parseInt(e.target.value)})} className="w-full accent-cad-accent"/>
-                      </div>
-                  </div>
-                  <div className="mt-6 flex justify-end">
-                      <button onClick={() => setShowConfigModal(false)} className="px-4 py-2 bg-cad-accent text-white rounded text-sm font-medium hover:brightness-110">Concluir</button>
-                  </div>
-              </div>
+        <div className="grid grid-cols-2 gap-4 font-mono text-sm">
+          <div>
+            <span className="text-cad-accent block text-xs mb-1">NORTE (Y)</span>
+            {p.n.toFixed(3)} m
           </div>
-      )}
-
-      {/* Version Control Modal */}
-      {showVersionModal && (
-          <VersionControlModal 
-              currentData={{ points, annotations, polygons, metadata }} 
-              onLoad={loadSnapshot} 
-              onClose={() => setShowVersionModal(false)}
-              theme={layerConfig.theme}
-          />
-      )}
-
-      {/* Import Modal */}
-      {showImportModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-             <div className={`rounded-xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh] border animate-in fade-in zoom-in-95 ${layerConfig.theme === 'dark' ? 'bg-cad-panel border-cad-border text-cad-text' : 'bg-white border-slate-200 text-slate-900'}`}>
-                <div className="p-4 border-b border-inherit flex justify-between items-center">
-                    <h3 className="font-bold text-lg">Importar CSV / TXT</h3>
-                    <button onClick={() => setShowImportModal(false)}><Trash2 size={18} className="opacity-50 hover:opacity-100"/></button>
-                </div>
-                <div className="p-6 flex-1 overflow-auto space-y-4">
-                    <div className="flex gap-4">
-                         <div className="flex-1 space-y-2">
-                             <label className="text-xs font-bold opacity-50 uppercase">Mapeamento de Colunas (Índice)</label>
-                             <div className="grid grid-cols-5 gap-2">
-                                {['ID', 'X', 'Y', 'Z', 'Desc'].map((l, i) => (
-                                    <div key={l}>
-                                        <label className="text-[10px] opacity-40 block">{l}</label>
-                                        <input type="number" 
-                                            value={Object.values(manualMapping)[i]} 
-                                            onChange={(e) => setManualMapping({...manualMapping, [Object.keys(manualMapping)[i]]: parseInt(e.target.value)})}
-                                            className={`w-full p-1 text-xs border rounded ${layerConfig.theme === 'dark' ? 'bg-black/20 border-white/10' : 'bg-slate-50 border-slate-200'}`}
-                                        />
-                                    </div>
-                                ))}
-                             </div>
-                         </div>
-                         <div className="w-32 space-y-2">
-                             <label className="text-xs font-bold opacity-50 uppercase">Separador</label>
-                             <select value={manualMapping.delimiter} onChange={(e) => setManualMapping({...manualMapping, delimiter: e.target.value})} className={`w-full p-1 text-xs border rounded ${layerConfig.theme === 'dark' ? 'bg-black/20 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
-                                 <option value=",">Vírgula</option>
-                                 <option value=";">Ponto e Vírgula</option>
-                                 <option value="tab">Tab (TSV)</option>
-                                 <option value="space">Espaço</option>
-                             </select>
-                         </div>
-                    </div>
-                    
-                    {savedMappings.length > 0 && (
-                        <div className="flex gap-2 overflow-x-auto pb-2">
-                            {savedMappings.map((m, i) => (
-                                <button key={i} onClick={() => setManualMapping(m)} className="px-3 py-1 bg-cad-accent/10 border border-cad-accent/30 text-cad-accent rounded-full text-xs hover:bg-cad-accent/20 whitespace-nowrap">
-                                    {m.name || `Config ${i+1}`}
-                                </button>
-                            ))}
-                        </div>
-                    )}
-
-                    <div className="flex justify-between items-center">
-                        <label className="text-xs font-bold opacity-50 uppercase">Dados Brutos</label>
-                        <button onClick={saveMapping} className="text-xs text-cad-accent hover:underline flex items-center gap-1"><Save size={12}/> Salvar Mapeamento</button>
-                    </div>
-                    <textarea value={importText} onChange={(e) => setImportText(e.target.value)} className={`w-full h-40 p-3 font-mono text-xs rounded border ${layerConfig.theme === 'dark' ? 'bg-black/20 border-white/10' : 'bg-slate-50 border-slate-200'}`} placeholder="Cole seus dados aqui..."></textarea>
-                </div>
-                <div className="p-4 border-t border-inherit flex justify-end gap-2">
-                    <button onClick={() => setShowImportModal(false)} className="px-4 py-2 text-sm opacity-60 hover:opacity-100">Cancelar</button>
-                    <button onClick={handleManualImport} className="px-6 py-2 bg-cad-accent text-white rounded text-sm font-bold shadow-lg hover:brightness-110">Processar Importação</button>
-                </div>
-             </div>
+          <div>
+            <span className="text-cad-accent block text-xs mb-1">LESTE (X)</span>
+            {p.e.toFixed(3)} m
+          </div>
         </div>
-      )}
+      </div>
+      <div className="bg-cad-accent/10 p-4 rounded-xl border border-cad-accent/20 space-y-4">
+        <div className="flex justify-between items-center border-b border-cad-accent/10 pb-2">
+          <span className="text-sm font-bold text-cad-accent">Coordenadas Geodésicas (Calculado)</span>
+        </div>
+        <div className="grid grid-cols-2 gap-4 font-mono text-sm">
+          <div><span className="text-zinc-400 block text-xs mb-1">LATITUDE</span>{lat.toFixed(8)}°</div>
+          <div><span className="text-zinc-400 block text-xs mb-1">LONGITUDE</span>{long.toFixed(8)}°</div>
+        </div>
+      </div>
     </div>
   );
 };
 
-// --- Survey Map ---
-
-interface SurveyMapProps {
-  points: SurveyPoint[];
-  setPoints: (points: SurveyPoint[]) => void;
-  annotations: MapAnnotation[];
-  setAnnotations: (annos: MapAnnotation[]) => void;
-  polygons: SurveyPolygon[];
-  setPolygons: (polys: SurveyPolygon[]) => void;
-  viewBox: MapViewBox;
-  setViewBox: (v: MapViewBox) => void;
-  mapStyle: 'tech' | 'satellite' | 'clean';
-  setMapStyle: (s: 'tech' | 'satellite' | 'clean') => void;
-  selectedIds: Set<string>;
-  setSelectedIds: (ids: Set<string>) => void;
-  undo: () => void;
-  redo: () => void;
-  canUndo: boolean;
-  canRedo: boolean;
-  openConfig: () => void;
-  layerConfig: LayerConfig;
-  clearDrawing: () => void;
-  pushHistory: (pts: SurveyPoint[], annos: MapAnnotation[], polys: SurveyPolygon[]) => void;
-}
-
-const SurveyMap = ({ 
-  points, setPoints, annotations, setAnnotations, polygons, setPolygons,
-  viewBox, setViewBox, mapStyle, setMapStyle, 
-  selectedIds, setSelectedIds, undo, redo, canUndo, canRedo, 
-  openConfig, layerConfig, clearDrawing, pushHistory
-}: SurveyMapProps) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  
-  // Tools
-  const [activeTool, setActiveTool] = useState<'select' | 'pan' | 'point' | 'polyline' | 'move' | 'delete' | 'measure' | 'area' | 'text' | 'box-select'>('select');
-  const [cursorCoords, setCursorCoords] = useState({ x: 0, y: 0 }); // World
-  const [mouseScreenCoords, setMouseScreenCoords] = useState({ x: 0, y: 0 }); // Screen for tooltip
-  const [snapEnabled, setSnapEnabled] = useState(true);
-  const [gridEnabled, setGridEnabled] = useState(true);
-  
-  // View History for Undo Zoom
-  const [viewHistory, setViewHistory] = useState<MapViewBox[]>([]);
-
-  // Manual Point Modal
-  const [showPointModal, setShowPointModal] = useState(false);
-  const [newPointData, setNewPointData] = useState({ x: '', y: '', z: '', desc: '' });
-
-  // Dragging / Moving
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 }); // Screen coords
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 }); // World coords offset for move tool
-  
-  // Selection Box State
-  const [selectionBoxStart, setSelectionBoxStart] = useState<{x: number, y: number} | null>(null);
-  const [selectionBoxEnd, setSelectionBoxEnd] = useState<{x: number, y: number} | null>(null);
-
-  // Move Tool State
-  const [movingId, setMovingId] = useState<string | null>(null);
-  const [movingType, setMovingType] = useState<'point' | 'annotation' | 'polygon' | null>(null);
-  const [originalPos, setOriginalPos] = useState<{x: number, y: number} | null>(null);
-
-  // Interaction State
-  const [hoverPoint, setHoverPoint] = useState<SurveyPoint | null>(null);
-  const [hoverTool, setHoverTool] = useState<ToolTooltip | null>(null);
-  const [measureStart, setMeasureStart] = useState<{x: number, y: number} | null>(null);
-  const [measureEnd, setMeasureEnd] = useState<{x: number, y: number} | null>(null);
-  const [areaPoints, setAreaPoints] = useState<{x: number, y: number}[]>([]);
-
-  // Theme Constants
-  const isDark = layerConfig.theme === 'dark';
-  const colors = {
-    bg: isDark ? '#18181b' : '#ffffff',
-    grid: layerConfig.gridColor || (isDark ? 'rgba(255,255,255,0.05)' : '#e2e8f0'),
-    line: layerConfig.lineColor,
-    point: layerConfig.pointColor,
-    select: layerConfig.selectedColor,
-    hover: layerConfig.hoverColor,
-    text: isDark ? '#e4e4e7' : '#334155'
-  };
-
-  const bounds = useMemo(() => {
-    if (points.length === 0) return { minX:0, maxX:100, minY:0, maxY:100, w:100, h:100 };
-    const xs = points.map(p => p.x); const ys = points.map(p => p.y);
-    const minX = Math.min(...xs); const maxX = Math.max(...xs);
-    const minY = Math.min(...ys); const maxY = Math.max(...ys);
-    const w = maxX - minX || 10; const h = maxY - minY || 10;
-    return { minX: minX - w * 0.1, maxX: maxX + w * 0.1, minY: minY - h * 0.1, maxY: maxY + h * 0.1, w: w * 1.2, h: h * 1.2 };
+// 2. Memorial Tool (Deprecated/Moved to Reports, keeping for compatibility if activeTool uses it)
+const MemorialTool = ({ points }: { points: Point[] }) => {
+  const text = useMemo(() => {
+    return `MEMORIAL DESCRITIVO\n\nImóvel: Fazenda Santa Maria\nProprietário: Cliente Exemplo LTDA\n\nDESCRIÇÃO:\nInicia-se no vértice ${points[0]?.name} (N=${points[0]?.n.toFixed(3)}, E=${points[0]?.e.toFixed(3)})...`;
   }, [points]);
 
-  const transform = useMemo(() => {
-     const scaleX = 1000 / bounds.w; const scaleY = 1000 / bounds.h;
-     const scale = Math.min(scaleX, scaleY);
-     const drawnW = bounds.w * scale; const drawnH = bounds.h * scale;
-     const offsetX = (1000 - drawnW) / 2; const offsetY = (1000 - drawnH) / 2;
-     return { scale, offsetX, offsetY, minX: bounds.minX, maxY: bounds.maxY };
-  }, [bounds]);
+  return (
+    <div className="flex flex-col h-96">
+      <div className="flex gap-2 mb-4">
+        <button className="px-4 py-2 bg-cad-accent text-white rounded-lg text-sm font-bold shadow-lg">Gerar PDF</button>
+      </div>
+      <textarea className="flex-1 w-full bg-zinc-950 border border-white/10 rounded-xl p-4 font-mono text-sm text-zinc-300 resize-none" readOnly value={text} />
+    </div>
+  );
+};
 
-  const toSvg = (x: number, y: number) => ({
-    svgX: (x - transform.minX) * transform.scale + transform.offsetX,
-    svgY: (transform.maxY - y) * transform.scale + transform.offsetY
-  });
+// 3. Perfil Tool
+const PerfilTool = ({ points }: { points: Point[] }) => {
+  const data = useMemo(() => points.map((p, i) => ({ name: p.name, dist: i * 20, cota: p.z, projected: p.z - Math.sin(i) * 2 })), [points]);
+  return (
+    <div className="h-96 w-full flex flex-col">
+       <div className="flex justify-between mb-4"><div className="text-sm text-zinc-400">Perfil: <span className="text-white font-bold">Eixo Principal</span></div></div>
+       <div className="flex-1 bg-zinc-900/50 rounded-xl border border-white/5 p-4 relative">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={data}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+              <XAxis dataKey="dist" stroke="#666" tick={{fill: '#666', fontSize: 10}} />
+              <YAxis domain={['auto', 'auto']} stroke="#666" tick={{fill: '#666', fontSize: 10}} />
+              <RechartsTooltip contentStyle={{ backgroundColor: '#18181b', borderColor: '#333' }} itemStyle={{ color: '#fff' }} />
+              <Area type="monotone" dataKey="cota" stroke="#06b6d4" fillOpacity={0.3} fill="#06b6d4" strokeWidth={2} name="Terreno" />
+              <Line type="monotone" dataKey="projected" stroke="#10b981" strokeWidth={2} strokeDasharray="5 5" name="Greide" dot={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+       </div>
+    </div>
+  );
+};
 
-  const fromSvg = (svgX: number, svgY: number) => ({
-    x: (svgX - transform.offsetX) / transform.scale + transform.minX,
-    y: transform.maxY - (svgY - transform.offsetY) / transform.scale
-  });
-
-  const getNearestSnapPoint = (x: number, y: number, toleranceScreen: number = 15) => {
-      const zoomFactor = viewBox.w / 1000; 
-      const toleranceWorld = (toleranceScreen * zoomFactor) / transform.scale;
-      let nearest = null;
-      let minD = Infinity;
-      
-      // Points
-      points.forEach(p => {
-          const d = Math.sqrt((p.x - x)**2 + (p.y - y)**2);
-          if (d < toleranceWorld && d < minD) { minD = d; nearest = { x: p.x, y: p.y }; }
-      });
-      // Active Area Drawing
-      areaPoints.forEach(p => {
-          const d = Math.sqrt((p.x - x)**2 + (p.y - y)**2);
-          if (d < toleranceWorld && d < minD) { minD = d; nearest = { x: p.x, y: p.y }; }
-      });
-      // Saved Polygons Vertices
-      polygons.forEach(poly => {
-          poly.points.forEach(p => {
-              const d = Math.sqrt((p.x - x)**2 + (p.y - y)**2);
-              if (d < toleranceWorld && d < minD) { minD = d; nearest = { x: p.x, y: p.y }; }
-          });
-      });
-
-      return nearest;
-  };
-
-  const handleZoomExtents = () => {
-      const newViewBox = {
-          x: 0, y: 0, w: 1000, h: 1000
-      };
-      setViewHistory([...viewHistory, viewBox]);
-      setViewBox(newViewBox);
-  };
-
-  const handleZoomPrevious = () => {
-      if (viewHistory.length > 0) {
-          const prev = viewHistory[viewHistory.length - 1];
-          setViewHistory(viewHistory.slice(0, -1));
-          setViewBox(prev);
-      }
-  };
-
-  // --- Handlers ---
-  const handleMouseDown = (e: React.MouseEvent) => {
-    const rect = containerRef.current!.getBoundingClientRect();
-    const zoomFactor = viewBox.w / rect.width;
-    const svgClickX = viewBox.x + (e.clientX - rect.left) * zoomFactor;
-    const svgClickY = viewBox.y + (e.clientY - rect.top) * zoomFactor;
-    const worldPos = fromSvg(svgClickX, svgClickY);
-
-    if (activeTool === 'pan') {
-        setIsDragging(true);
-        setDragStart({ x: e.clientX, y: e.clientY });
-        return;
-    }
-    if (activeTool === 'box-select') {
-        setSelectionBoxStart(worldPos);
-        setSelectionBoxEnd(worldPos);
-        return;
-    }
-    if (activeTool === 'move') {
-        const tolerance = (15 * zoomFactor) / transform.scale;
-        const hitPoint = points.find(p => Math.sqrt((p.x - worldPos.x)**2 + (p.y - worldPos.y)**2) < tolerance);
-        if (hitPoint) {
-            setMovingId(hitPoint.id); setMovingType('point');
-            setOriginalPos({ x: hitPoint.x, y: hitPoint.y });
-            setDragOffset({ x: worldPos.x - hitPoint.x, y: worldPos.y - hitPoint.y });
-            setIsDragging(true); return;
-        }
-        const hitAnno = annotations.find(a => Math.sqrt((a.x - worldPos.x)**2 + (a.y - worldPos.y)**2) < tolerance);
-        if (hitAnno) {
-            setMovingId(hitAnno.id); setMovingType('annotation');
-            setOriginalPos({ x: hitAnno.x, y: hitAnno.y });
-            setDragOffset({ x: worldPos.x - hitAnno.x, y: worldPos.y - hitAnno.y });
-            setIsDragging(true); return;
-        }
-    }
-    if (activeTool === 'select') {
-       const tolerance = (15 * zoomFactor) / transform.scale;
-       // Check Points
-       const hit = points.find(p => Math.sqrt((p.x - worldPos.x)**2 + (p.y - worldPos.y)**2) < tolerance);
-       if (hit) {
-           const newSet = new Set(e.shiftKey ? selectedIds : []);
-           if (e.shiftKey && selectedIds.has(hit.id)) newSet.delete(hit.id); else newSet.add(hit.id);
-           setSelectedIds(newSet); return;
-       } 
-       // Check Annotations
-       const hitAnno = annotations.find(a => Math.sqrt((a.x - worldPos.x)**2 + (a.y - worldPos.y)**2) < tolerance);
-       if (hitAnno) {
-           const newSet = new Set(e.shiftKey ? selectedIds : []);
-           if (e.shiftKey && selectedIds.has(hitAnno.id)) newSet.delete(hitAnno.id); else newSet.add(hitAnno.id);
-           setSelectedIds(newSet); return;
-       }
-       setIsDragging(true); setDragStart({ x: e.clientX, y: e.clientY });
-    }
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    const rect = containerRef.current!.getBoundingClientRect();
-    setMouseScreenCoords({ x: e.clientX - rect.left, y: e.clientY - rect.top }); // For Tooltip
-
-    const zoomFactor = viewBox.w / rect.width;
-    const svgClickX = viewBox.x + (e.clientX - rect.left) * zoomFactor;
-    const svgClickY = viewBox.y + (e.clientY - rect.top) * zoomFactor;
-    let worldPos = fromSvg(svgClickX, svgClickY);
-    
-    if (snapEnabled && (activeTool !== 'pan' && activeTool !== 'select' && activeTool !== 'box-select')) {
-         const snap = getNearestSnapPoint(worldPos.x, worldPos.y);
-         if (snap) worldPos = snap;
-    }
-    setCursorCoords({ x: worldPos.x, y: worldPos.y });
-
-    if (activeTool === 'box-select' && selectionBoxStart) {
-        setSelectionBoxEnd(worldPos);
-    }
-
-    if (activeTool === 'pan' && isDragging) {
-        const dx = e.clientX - dragStart.x;
-        const dy = e.clientY - dragStart.y;
-        setViewBox({ ...viewBox, x: viewBox.x - dx * zoomFactor, y: viewBox.y - dy * zoomFactor });
-        setDragStart({ x: e.clientX, y: e.clientY });
-    } else if (activeTool === 'select' && isDragging) {
-        // Pan behavior in select tool
-        const dx = e.clientX - dragStart.x;
-        const dy = e.clientY - dragStart.y;
-        setViewBox({ ...viewBox, x: viewBox.x - dx * zoomFactor, y: viewBox.y - dy * zoomFactor });
-        setDragStart({ x: e.clientX, y: e.clientY });
-    }
-    if (activeTool === 'move' && isDragging && movingId) {
-        const newX = worldPos.x - dragOffset.x;
-        const newY = worldPos.y - dragOffset.y;
-        let finalPos = { x: newX, y: newY };
-        if (snapEnabled) {
-            const snap = getNearestSnapPoint(newX, newY);
-            if (snap) finalPos = snap;
-        }
-        if (movingType === 'point') setPoints(points.map(p => p.id === movingId ? { ...p, x: finalPos.x, y: finalPos.y } : p));
-        else if (movingType === 'annotation') setAnnotations(annotations.map(a => a.id === movingId ? { ...a, x: finalPos.x, y: finalPos.y } : a));
-    }
-    if (activeTool === 'measure' && measureStart) setMeasureEnd(worldPos);
-  };
-
-  const handleMouseUp = () => {
-    if (activeTool === 'move' && isDragging && movingId) pushHistory(points, annotations, polygons);
-    
-    if (activeTool === 'box-select' && selectionBoxStart && selectionBoxEnd) {
-        // Calculate selection
-        const minX = Math.min(selectionBoxStart.x, selectionBoxEnd.x);
-        const maxX = Math.max(selectionBoxStart.x, selectionBoxEnd.x);
-        const minY = Math.min(selectionBoxStart.y, selectionBoxEnd.y);
-        const maxY = Math.max(selectionBoxStart.y, selectionBoxEnd.y);
-
-        const newSelection = new Set<string>();
-        
-        // Select Points
-        points.forEach(p => {
-            if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) {
-                newSelection.add(p.id);
-            }
-        });
-
-        // Select Annotations
-        annotations.forEach(a => {
-             if (a.x >= minX && a.x <= maxX && a.y >= minY && a.y <= maxY) {
-                newSelection.add(a.id);
-            }
-        });
-        
-        // Select Polygons (if any point is inside)
-        polygons.forEach(p => {
-            const inside = p.points.some(pt => pt.x >= minX && pt.x <= maxX && pt.y >= minY && pt.y <= maxY);
-            if(inside) newSelection.add(p.id);
-        });
-
-        setSelectedIds(newSelection);
-        setSelectionBoxStart(null);
-        setSelectionBoxEnd(null);
-        setActiveTool('select'); // Switch back to select after box
-    }
-
-    setIsDragging(false); setMovingId(null); setMovingType(null); setOriginalPos(null);
-  };
-
-  const handleMapClick = (e: React.MouseEvent) => {
-    if (isDragging) return;
-    const rect = containerRef.current!.getBoundingClientRect();
-    const zoomFactor = viewBox.w / rect.width;
-    const svgClickX = viewBox.x + (e.clientX - rect.left) * zoomFactor;
-    const svgClickY = viewBox.y + (e.clientY - rect.top) * zoomFactor;
-    let worldPos = fromSvg(svgClickX, svgClickY);
-    if (snapEnabled) {
-        const snap = getNearestSnapPoint(worldPos.x, worldPos.y);
-        if (snap) worldPos = snap;
-    }
-    if (activeTool === 'point' || activeTool === 'polyline') {
-        const newId = `P${(points.length + 1).toString().padStart(2, '0')}`;
-        const newPoints = [...points, { id: newId, x: worldPos.x, y: worldPos.y, z: 0, desc: 'Novo Ponto' }];
-        setPoints(newPoints); pushHistory(newPoints, annotations, polygons);
-    }
-    if (activeTool === 'text') {
-        const text = prompt("Conteúdo da anotação:");
-        if (text) {
-             const newAnnos = [...annotations, { id: `T${annotations.length + 1}`, x: worldPos.x, y: worldPos.y, text, size: 12, color: isDark ? '#FFF' : '#000' }];
-             setAnnotations(newAnnos); pushHistory(points, newAnnos, polygons); setActiveTool('select');
-        }
-    }
-    if (activeTool === 'delete') {
-         const tolerance = (15 * zoomFactor) / transform.scale;
-         const hitPointIdx = points.findIndex(p => Math.sqrt((p.x - worldPos.x)**2 + (p.y - worldPos.y)**2) < tolerance);
-         if (hitPointIdx !== -1) { 
-             const newP = points.filter((_, i) => i !== hitPointIdx);
-             setPoints(newP); pushHistory(newP, annotations, polygons); return; 
-         }
-         const hitAnnoIdx = annotations.findIndex(a => Math.sqrt((a.x - worldPos.x)**2 + (a.y - worldPos.y)**2) < tolerance);
-         if (hitAnnoIdx !== -1) { 
-             const newA = annotations.filter((_, i) => i !== hitAnnoIdx);
-             setAnnotations(newA); pushHistory(points, newA, polygons); return;
-         }
-         // Polygons handle delete by selection usually
-         const hitPoly = polygons.find(poly => {
-            // Rough centroid check for click
-            const cx = poly.points.reduce((acc,p)=>acc+p.x,0)/poly.points.length;
-            const cy = poly.points.reduce((acc,p)=>acc+p.y,0)/poly.points.length;
-            return Math.sqrt((cx-worldPos.x)**2 + (cy-worldPos.y)**2) < tolerance * 2;
-         });
-         if (hitPoly) {
-             const newPolys = polygons.filter(p => p.id !== hitPoly.id);
-             setPolygons(newPolys); pushHistory(points, annotations, newPolys);
-         }
-    }
-    if (activeTool === 'area') setAreaPoints([...areaPoints, worldPos]);
-    if (activeTool === 'measure') {
-        if (!measureStart) { setMeasureStart(worldPos); setMeasureEnd(worldPos); } 
-        else { setMeasureEnd(worldPos); setActiveTool('select'); }
-    }
-  };
-
-  const handleWheel = (e: React.WheelEvent) => {
-    const zoomIntensity = 0.1;
-    const direction = e.deltaY > 0 ? 1 : -1;
-    const wChange = viewBox.w * zoomIntensity * direction;
-    const hChange = viewBox.h * zoomIntensity * direction;
-    setViewBox({ x: viewBox.x - wChange / 2, y: viewBox.y - hChange / 2, w: viewBox.w + wChange, h: viewBox.h + hChange });
-  };
-
-  const handleManualAddPoint = () => {
-      if(newPointData.x && newPointData.y) {
-          const newId = `P${(points.length + 1).toString().padStart(2, '0')}`;
-          const p: SurveyPoint = {
-              id: newId,
-              x: parseFloat(newPointData.x),
-              y: parseFloat(newPointData.y),
-              z: parseFloat(newPointData.z) || 0,
-              desc: newPointData.desc || 'Manual'
-          };
-          const newPoints = [...points, p];
-          setPoints(newPoints);
-          pushHistory(newPoints, annotations, polygons);
-          setShowPointModal(false);
-          setNewPointData({x:'',y:'',z:'',desc:''});
-      }
-  }
-
-  const handleFinishArea = () => {
-      if (areaPoints.length < 3) {
-          setAreaPoints([]);
-          setActiveTool('select');
-          return;
-      }
-      const area = calculateArea(areaPoints);
-      const perimeter = calculatePerimeter([...areaPoints, areaPoints[0]]);
-      const newPoly: SurveyPolygon = {
-          id: `Lote ${polygons.length + 1}`,
-          points: [...areaPoints],
-          color: layerConfig.selectedColor,
-          area,
-          perimeter,
-          filled: true
-      };
-      const newPolys = [...polygons, newPoly];
-      setPolygons(newPolys);
-      pushHistory(points, annotations, newPolys);
-      setAreaPoints([]);
-      setSelectedIds(new Set([newPoly.id]));
-      setActiveTool('select');
-  };
-
-  // --- Render Prep ---
-  const gridLines = useMemo(() => {
-    if (!gridEnabled) return [];
-    const topLeft = fromSvg(viewBox.x, viewBox.y);
-    const bottomRight = fromSvg(viewBox.x + viewBox.w, viewBox.y + viewBox.h);
-    const minX = Math.min(topLeft.x, bottomRight.x);
-    const maxX = Math.max(topLeft.x, bottomRight.x);
-    const minY = Math.min(topLeft.y, bottomRight.y);
-    const maxY = Math.max(topLeft.y, bottomRight.y);
-    const step = layerConfig.gridSpacing || 50;
-    const startX = Math.ceil(minX / step) * step;
-    const startY = Math.ceil(minY / step) * step;
-    const lines = [];
-    for (let x = startX; x <= maxX; x += step) lines.push({ x1: toSvg(x, minY).svgX, y1: 0, x2: toSvg(x, minY).svgX, y2: 10000 });
-    for (let y = startY; y <= maxY; y += step) lines.push({ x1: -10000, y1: toSvg(minX, y).svgY, x2: 10000, y2: toSvg(minX, y).svgY });
-    return lines;
-  }, [viewBox, transform, gridEnabled, layerConfig.gridSpacing]);
-
-  const dist = measureStart && measureEnd ? Math.sqrt((measureEnd.x - measureStart.x)**2 + (measureEnd.y - measureStart.y)**2) : 0;
-  
-  // Update Selection Data based on WHAT is selected
-  const selectionData = useMemo(() => {
-     if (selectedIds.size === 0) return null;
-     const id = Array.from(selectedIds)[0];
-     
-     // Check if it's a Polygon
-     const poly = polygons.find(p => p.id === id);
-     if (poly) return { type: 'polygon', data: poly };
-
-     // Check if it's an Annotation
-     const anno = annotations.find(a => a.id === id);
-     if (anno) return { type: 'annotation', data: anno };
-
-     // Check if it's a Set of Points
-     const selectedPoints = points.filter(p => selectedIds.has(p.id));
-     if (selectedPoints.length > 0) return { type: 'points', data: selectedPoints };
-
-     return null;
-  }, [points, polygons, annotations, selectedIds]);
+// 4. Volume Tool
+const VolumeTool = ({ points }: { points: Point[] }) => {
+  const [cotaPlato, setCotaPlato] = useState(102);
+  const avgZ = points.reduce((acc, p) => acc + p.z, 0) / points.length;
+  const area = 1540.50; 
+  const diff = avgZ - cotaPlato;
+  const volume = Math.abs(diff * area);
+  const type = diff > 0 ? 'CORTE' : 'ATERRO';
 
   return (
-    <div className={`w-full h-full relative overflow-hidden flex flex-col ${isDark ? 'bg-[#18181b]' : 'bg-white'}`}>
-      
-      {/* Ribbon Toolbar */}
-      <div className={`h-11 border-b flex items-center px-2 space-x-1 shrink-0 ${isDark ? 'bg-cad-panel border-cad-border' : 'bg-white border-slate-200'}`}>
-          <ToolGroup>
-             <ToolbarBtn icon={<MousePointer2 size={16}/>} active={activeTool === 'select'} onClick={() => setActiveTool('select')} name="Selection" desc="Select objects in the map." theme={layerConfig.theme} onHover={setHoverTool}/>
-             <ToolbarBtn icon={<BoxSelect size={16}/>} active={activeTool === 'box-select'} onClick={() => setActiveTool('box-select')} name="Box Select" desc="Select multiple objects by area." theme={layerConfig.theme} onHover={setHoverTool}/>
-             <ToolbarBtn icon={<Hand size={16}/>} active={activeTool === 'pan'} onClick={() => setActiveTool('pan')} name="Pan" desc="Drag to pan the view." theme={layerConfig.theme} onHover={setHoverTool}/>
-             <ToolbarBtn icon={<Maximize size={16}/>} active={false} onClick={handleZoomExtents} name="Zoom Extents" desc="Fit all objects in view." theme={layerConfig.theme} onHover={setHoverTool}/>
-             <ToolbarBtn icon={<History size={16}/>} active={false} onClick={handleZoomPrevious} disabled={viewHistory.length === 0} name="Zoom Previous" desc="Undo last zoom." theme={layerConfig.theme} onHover={setHoverTool}/>
-          </ToolGroup>
-          <Separator theme={layerConfig.theme}/>
-          <ToolGroup>
-             <ToolbarBtn icon={<Circle size={16}/>} active={activeTool === 'point'} onClick={() => setActiveTool('point')} name="Point" desc="Create single survey points." theme={layerConfig.theme} onHover={setHoverTool}/>
-             <ToolbarBtn icon={<Keyboard size={16}/>} active={false} onClick={() => setShowPointModal(true)} name="Manual Point" desc="Input Coordinates Manually." theme={layerConfig.theme} onHover={setHoverTool}/>
-             <ToolbarBtn icon={<TypeIcon size={16}/>} active={activeTool === 'polyline'} onClick={() => setActiveTool('polyline')} name="Polyline" desc="Draw connected lines." theme={layerConfig.theme} onHover={setHoverTool}/>
-             <ToolbarBtn icon={<Pentagon size={16}/>} active={activeTool === 'area'} onClick={() => setActiveTool('area')} name="Area" desc="Define a closed area polygon." theme={layerConfig.theme} onHover={setHoverTool}/>
-             <ToolbarBtn icon={<TypeIcon size={16}/>} active={activeTool === 'text'} onClick={() => setActiveTool('text')} name="Annotation" desc="Add text labels to the map." theme={layerConfig.theme} onHover={setHoverTool}/>
-          </ToolGroup>
-          <Separator theme={layerConfig.theme}/>
-          <ToolGroup>
-             <ToolbarBtn icon={<Move size={16}/>} active={activeTool === 'move'} onClick={() => setActiveTool('move')} name="Move" desc="Move points or annotations." theme={layerConfig.theme} onHover={setHoverTool}/>
-             <ToolbarBtn icon={<Ruler size={16}/>} active={activeTool === 'measure'} onClick={() => { setActiveTool('measure'); setMeasureStart(null); }} name="Measure" desc="Measure distances between points." theme={layerConfig.theme} onHover={setHoverTool}/>
-             <ToolbarBtn icon={<Trash size={16}/>} active={activeTool === 'delete'} onClick={() => setActiveTool('delete')} name="Delete" desc="Remove objects from the drawing." theme={layerConfig.theme} onHover={setHoverTool}/>
-          </ToolGroup>
-          <div className="flex-1"></div>
-          <ToolGroup>
-              <ToolbarBtn icon={<Undo size={16}/>} onClick={undo} disabled={!canUndo} name="Undo" desc="Revert last action." theme={layerConfig.theme} onHover={setHoverTool}/>
-              <ToolbarBtn icon={<Redo size={16}/>} onClick={redo} disabled={!canRedo} name="Redo" desc="Redo reversed action." theme={layerConfig.theme} onHover={setHoverTool}/>
-          </ToolGroup>
-      </div>
-
-      <div className="flex-1 relative flex">
-         <div ref={containerRef} 
-              className={`flex-1 relative ${activeTool === 'pan' ? 'cursor-grab' : activeTool === 'move' ? 'cursor-move' : 'cursor-crosshair'} outline-none`}
-              onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} onClick={handleMapClick} onWheel={handleWheel}
-         >
-            <svg viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`} className="w-full h-full block" preserveAspectRatio="xMidYMid meet">
-                {gridLines.map((l, i) => (<line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke={colors.grid} strokeWidth={1 * (viewBox.w/1000)} vectorEffect="non-scaling-stroke"/>))}
-                
-                {/* SAVED POLYGONS */}
-                {polygons.map(poly => {
-                     const pointsStr = poly.points.map(p => { const {svgX,svgY} = toSvg(p.x, p.y); return `${svgX},${svgY}`; }).join(' ');
-                     const isSelected = selectedIds.has(poly.id);
-                     return (
-                         <polygon 
-                            key={poly.id} 
-                            points={pointsStr} 
-                            fill={poly.color} 
-                            fillOpacity={0.2} 
-                            stroke={isSelected ? '#fff' : poly.color} 
-                            strokeWidth={isSelected ? 3 * (viewBox.w/1000) : 2 * (viewBox.w/1000)} 
-                            vectorEffect="non-scaling-stroke"
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                const newSet = new Set(e.shiftKey ? selectedIds : []);
-                                if(!e.shiftKey) newSet.add(poly.id);
-                                setSelectedIds(newSet);
-                            }}
-                            className="cursor-pointer hover:opacity-80"
-                         />
-                     );
-                })}
-
-                {/* TEMP AREA DRAWING */}
-                {areaPoints.length > 0 && (
-                    <polygon points={areaPoints.map(p => { const {svgX,svgY}=toSvg(p.x, p.y); return `${svgX},${svgY}`; }).join(' ')} fill="rgba(16, 185, 129, 0.2)" stroke="#10b981" strokeWidth={2 * (viewBox.w/1000)} />
-                )}
-
-                {/* SELECTION BOX */}
-                {selectionBoxStart && selectionBoxEnd && activeTool === 'box-select' && (
-                    <rect 
-                        x={Math.min(toSvg(selectionBoxStart.x, selectionBoxStart.y).svgX, toSvg(selectionBoxEnd.x, selectionBoxEnd.y).svgX)}
-                        y={Math.min(toSvg(selectionBoxStart.x, selectionBoxStart.y).svgY, toSvg(selectionBoxEnd.x, selectionBoxEnd.y).svgY)}
-                        width={Math.abs(toSvg(selectionBoxEnd.x, selectionBoxEnd.y).svgX - toSvg(selectionBoxStart.x, selectionBoxStart.y).svgX)}
-                        height={Math.abs(toSvg(selectionBoxEnd.x, selectionBoxEnd.y).svgY - toSvg(selectionBoxStart.x, selectionBoxStart.y).svgY)}
-                        fill={colors.select}
-                        fillOpacity={0.1}
-                        stroke={colors.select}
-                        strokeWidth={1 * (viewBox.w/1000)}
-                        strokeDasharray="4 2"
-                    />
-                )}
-
-                {measureStart && measureEnd && (
-                   <g>
-                     <line x1={toSvg(measureStart.x, measureStart.y).svgX} y1={toSvg(measureStart.x, measureStart.y).svgY} x2={toSvg(measureEnd.x, measureEnd.y).svgX} y2={toSvg(measureEnd.x, measureEnd.y).svgY} stroke={colors.select} strokeWidth={2 * (viewBox.w/1000)} strokeDasharray="5,5"/>
-                     <text x={toSvg((measureStart.x+measureEnd.x)/2, (measureStart.y+measureEnd.y)/2).svgX} y={toSvg((measureStart.x+measureEnd.x)/2, (measureStart.y+measureEnd.y)/2).svgY} fill={colors.select} fontSize={14 * (viewBox.w/1000)} dy="-10" textAnchor="middle" fontWeight="bold">{dist.toFixed(3)}m</text>
-                   </g>
-                )}
-                
-                <polyline points={points.map(p => { const {svgX,svgY} = toSvg(p.x, p.y); return `${svgX},${svgY}`; }).join(' ')} fill="none" stroke={colors.line} strokeWidth={layerConfig.lineWidth * (viewBox.w/1000)} strokeLinejoin="round" vectorEffect="non-scaling-stroke"/>
-                {points.map(p => {
-                    const { svgX, svgY } = toSvg(p.x, p.y);
-                    const isSelected = selectedIds.has(p.id);
-                    const isMoving = movingId === p.id;
-                    const isHover = hoverPoint?.id === p.id;
-                    const r = layerConfig.pointSize * (viewBox.w/1000);
-                    
-                    // Visual Feedback for Moving
-                    const moveStyle = isMoving ? { opacity: 0.7, stroke: '#fbbf24', strokeWidth: 2 * (viewBox.w/1000), fill: 'transparent' } : {};
-
-                    return (
-                        <g key={p.id} className="group">
-                             {/* Ghost at original position */}
-                             {isMoving && originalPos && (
-                                 <circle cx={toSvg(originalPos.x, originalPos.y).svgX} cy={toSvg(originalPos.x, originalPos.y).svgY} r={r} fill={colors.point} opacity={0.3} strokeDasharray="2,2" stroke={colors.text} strokeWidth={1 * (viewBox.w/1000)}/>
-                             )}
-                             <circle cx={svgX} cy={svgY} r={isSelected ? r * 1.5 : r} 
-                                     fill={isSelected ? colors.select : isMoving ? '#fbbf24' : isHover ? colors.hover : colors.point} 
-                                     stroke={isMoving ? '#fff' : (isDark ? 'black' : 'white')} strokeWidth={isMoving ? 2 * (viewBox.w/1000) : 1 * (viewBox.w/1000)}
-                                     onMouseEnter={() => setHoverPoint(p)} onMouseLeave={() => setHoverPoint(null)}
-                                     style={{ transition: 'r 0.2s, fill 0.2s' }}
-                             />
-                             {/* Dashed halo when moving */}
-                             {isMoving && (
-                                 <circle cx={svgX} cy={svgY} r={r * 2} fill="none" stroke={colors.select} strokeWidth={1 * (viewBox.w/1000)} strokeDasharray="4,2" className="animate-spin-slow"/>
-                             )}
-                             {layerConfig.showLabels && (
-                                <text x={svgX} y={svgY} dy={-r*2} textAnchor="middle" fill={colors.text} fontSize={10 * (viewBox.w/1000)} className="font-mono font-bold select-none opacity-80">{p.id}</text>
-                             )}
-                        </g>
-                    )
-                })}
-                {annotations.map(a => {
-                    const { svgX, svgY } = toSvg(a.x, a.y);
-                    const isMoving = movingId === a.id;
-                    const isSelected = selectedIds.has(a.id);
-                    return (
-                        <g key={a.id}>
-                            {isMoving && originalPos && (
-                                <text x={toSvg(originalPos.x, originalPos.y).svgX} y={toSvg(originalPos.x, originalPos.y).svgY} fill={a.color} fontSize={a.size * (viewBox.w/1000)} textAnchor="middle" className="font-sans select-none opacity-30">{a.text}</text>
-                            )}
-                            <text x={svgX} y={svgY} fill={isMoving || isSelected ? colors.select : a.color} fontSize={a.size * (viewBox.w/1000)} textAnchor="middle" className={`font-sans select-none cursor-pointer ${isMoving ? 'opacity-70' : ''}`} style={{textShadow: isDark ? '0 1px 2px black' : '0 1px 2px white'}}
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    setSelectedIds(new Set([a.id]));
-                                }}
-                            >{a.text}</text>
-                            {isMoving && (
-                                <rect x={svgX - (a.text.length * a.size * (viewBox.w/1000) * 0.3)} y={svgY - a.size * (viewBox.w/1000)} width={a.text.length * a.size * (viewBox.w/1000) * 0.6} height={a.size * (viewBox.w/1000)} fill="none" stroke={colors.select} strokeDasharray="2,2" />
-                            )}
-                        </g>
-                    )
-                })}
-            </svg>
-
-            {/* Point Tooltip */}
-            {hoverPoint && (
-              <div style={{left: mouseScreenCoords.x + 15, top: mouseScreenCoords.y + 15}} className="absolute z-50 pointer-events-none">
-                 <div className={`p-2 rounded shadow-lg text-xs font-mono border backdrop-blur-md ${isDark ? 'bg-black/80 border-white/20 text-white' : 'bg-white/90 border-slate-300 text-slate-800'}`}>
-                    <div className="font-bold text-cad-accent mb-1">{hoverPoint.id}</div>
-                    <div>X: {hoverPoint.x.toFixed(3)}</div>
-                    <div>Y: {hoverPoint.y.toFixed(3)}</div>
-                    <div>Z: {hoverPoint.z.toFixed(3)}</div>
-                    <div className="opacity-70 italic">{hoverPoint.desc}</div>
-                 </div>
-              </div>
-            )}
-            
-            {/* Tool Tooltip */}
-            {hoverTool && (
-                <div style={{left: mouseScreenCoords.x + 10, top: mouseScreenCoords.y + 20}} className="absolute z-50 pointer-events-none animate-in fade-in duration-300">
-                     <div className={`p-3 rounded-md shadow-xl text-xs border max-w-[200px] ${isDark ? 'bg-[#27272a] border-white/10 text-white' : 'bg-white border-slate-200 text-slate-800'}`}>
-                         <div className="font-bold uppercase tracking-wider mb-1 text-cad-accent">{hoverTool.name}</div>
-                         <div className="opacity-80 leading-relaxed">{hoverTool.description}</div>
-                     </div>
-                </div>
-            )}
-
-            {/* Property Inspector (Dynamic based on selection) */}
-            {selectionData && (
-                <div className={`absolute top-4 right-4 w-64 rounded-lg shadow-cad backdrop-blur-md border animate-in slide-in-from-right-5 fade-in duration-200 z-30 ${isDark ? 'bg-[#18181b]/90 border-[#3f3f46] text-white' : 'bg-white/90 border-slate-200 text-slate-800'}`}>
-                    {selectionData.type === 'points' && (
-                        <>
-                            <div className="h-8 flex items-center justify-between px-3 border-b border-inherit bg-opacity-50 bg-black/5">
-                                <span className="text-[10px] font-bold uppercase tracking-wider opacity-70">Seleção: Pontos</span>
-                                <Info size={12} className="opacity-50"/>
-                            </div>
-                            <div className="p-4 space-y-3">
-                                <div className="flex justify-between items-baseline"><span className="text-xs opacity-60">Qtd</span><span className="font-mono font-bold">{selectionData.data.length}</span></div>
-                                <div className="h-px bg-inherit opacity-20"></div>
-                                {/* Basic Stats if > 2 */}
-                                {selectionData.data.length > 2 && (
-                                  <>
-                                    <div className="flex justify-between items-baseline"><span className="text-xs opacity-60">Área (m²)</span><span className="font-mono font-bold text-cad-accent">{calculateArea(selectionData.data as SurveyPoint[]).toFixed(2)}</span></div>
-                                    <div className="flex justify-between items-baseline"><span className="text-xs opacity-60">Perímetro</span><span className="font-mono font-bold text-emerald-500">{calculatePerimeter(selectionData.data as SurveyPoint[]).toFixed(2)} m</span></div>
-                                  </>
-                                )}
-                            </div>
-                        </>
-                    )}
-
-                    {selectionData.type === 'polygon' && (
-                        <>
-                             <div className="h-8 flex items-center justify-between px-3 border-b border-inherit bg-opacity-50 bg-black/5">
-                                <span className="text-[10px] font-bold uppercase tracking-wider opacity-70">Lote: {(selectionData.data as SurveyPolygon).id}</span>
-                                <Info size={12} className="opacity-50"/>
-                            </div>
-                            <div className="p-4 space-y-3">
-                                <div className="flex justify-between items-baseline"><span className="text-xs opacity-60">Área (m²)</span><span className="font-mono font-bold text-cad-accent">{(selectionData.data as SurveyPolygon).area.toFixed(2)}</span></div>
-                                <div className="flex justify-between items-baseline"><span className="text-xs opacity-60">Perímetro</span><span className="font-mono font-bold text-emerald-500">{(selectionData.data as SurveyPolygon).perimeter.toFixed(2)} m</span></div>
-                                <div className="pt-2 border-t border-inherit border-opacity-20">
-                                    <label className="text-[10px] opacity-60 block mb-1">Cor do Lote</label>
-                                    <input type="color" value={(selectionData.data as SurveyPolygon).color} 
-                                           onChange={(e) => {
-                                               const updatedPolys = polygons.map(p => p.id === (selectionData.data as SurveyPolygon).id ? {...p, color: e.target.value} : p);
-                                               setPolygons(updatedPolys);
-                                           }}
-                                           className="w-full h-6 rounded cursor-pointer"
-                                    />
-                                </div>
-                            </div>
-                        </>
-                    )}
-
-                    {selectionData.type === 'annotation' && (
-                        <>
-                             <div className="h-8 flex items-center justify-between px-3 border-b border-inherit bg-opacity-50 bg-black/5">
-                                <span className="text-[10px] font-bold uppercase tracking-wider opacity-70">Texto</span>
-                                <TypeIcon size={12} className="opacity-50"/>
-                            </div>
-                            <div className="p-4 space-y-3">
-                                <div>
-                                    <label className="text-[10px] opacity-60 block mb-1">Conteúdo</label>
-                                    <input type="text" value={(selectionData.data as MapAnnotation).text} 
-                                           onChange={(e) => {
-                                               const updatedAnnos = annotations.map(a => a.id === (selectionData.data as MapAnnotation).id ? {...a, text: e.target.value} : a);
-                                               setAnnotations(updatedAnnos);
-                                           }}
-                                           className="w-full bg-black/10 border border-white/10 rounded px-2 py-1 text-xs"
-                                    />
-                                </div>
-                                <div className="grid grid-cols-2 gap-2">
-                                     <div>
-                                         <label className="text-[10px] opacity-60 block mb-1">Tamanho</label>
-                                         <input type="number" value={(selectionData.data as MapAnnotation).size}
-                                                onChange={(e) => {
-                                                    const updatedAnnos = annotations.map(a => a.id === (selectionData.data as MapAnnotation).id ? {...a, size: parseInt(e.target.value)} : a);
-                                                    setAnnotations(updatedAnnos);
-                                                }}
-                                                className="w-full bg-black/10 border border-white/10 rounded px-2 py-1 text-xs"
-                                         />
-                                     </div>
-                                     <div>
-                                         <label className="text-[10px] opacity-60 block mb-1">Cor</label>
-                                         <input type="color" value={(selectionData.data as MapAnnotation).color}
-                                                onChange={(e) => {
-                                                    const updatedAnnos = annotations.map(a => a.id === (selectionData.data as MapAnnotation).id ? {...a, color: e.target.value} : a);
-                                                    setAnnotations(updatedAnnos);
-                                                }}
-                                                className="w-full h-6 rounded cursor-pointer"
-                                         />
-                                     </div>
-                                </div>
-                            </div>
-                        </>
-                    )}
-                </div>
-            )}
-            
-            <div className={`absolute bottom-0 inset-x-0 h-7 flex items-center justify-between px-3 text-[10px] font-mono select-none border-t ${isDark ? 'bg-cad-panel border-cad-border text-cad-muted' : 'bg-white border-slate-200 text-slate-500'}`}>
-                 <div className="flex items-center space-x-4">
-                     <span className="w-40">X: {cursorCoords.x.toFixed(3)} Y: {cursorCoords.y.toFixed(3)}</span>
-                     <div className="h-3 w-px bg-current opacity-20"></div>
-                     <button onClick={() => setSnapEnabled(!snapEnabled)} className={`uppercase font-bold hover:text-cad-accent ${snapEnabled ? 'text-cad-accent' : 'opacity-50'}`}>OSNAP</button>
-                     <button onClick={() => setGridEnabled(!gridEnabled)} className={`uppercase font-bold hover:text-cad-accent ${gridEnabled ? 'text-cad-accent' : 'opacity-50'}`}>GRID</button>
-                 </div>
-                 <div className="flex items-center space-x-2">
-                     <span className="opacity-70">ESCALA 1:{(1000/viewBox.w * 100).toFixed(0)}</span>
-                     <div className="h-3 w-px bg-current opacity-20"></div>
-                     <span className="font-bold text-cad-accent">{activeTool.toUpperCase()}</span>
-                 </div>
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-6">
+         <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-zinc-500 uppercase">Cota do Platô (m)</label>
+              <input type="number" value={cotaPlato} onChange={(e) => setCotaPlato(Number(e.target.value))} className="w-full bg-zinc-900 border border-white/10 rounded-lg p-3 text-white text-right font-mono text-lg" />
             </div>
-            {activeTool === 'area' && areaPoints.length > 2 && (
-                <div className="absolute top-4 left-4 z-40">
-                     <button onClick={handleFinishArea} className="bg-emerald-600 text-white px-3 py-1.5 rounded shadow-lg text-xs font-bold hover:bg-emerald-500 flex items-center gap-2"><CheckCircle2 size={14}/> Finalizar Área</button>
-                </div>
-            )}
-
-            {/* Manual Point Modal */}
-            {showPointModal && (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-                    <div className={`w-64 p-4 rounded shadow-2xl border ${isDark ? 'bg-[#27272a] border-white/20' : 'bg-white border-slate-200'}`}>
-                        <h4 className="text-xs font-bold uppercase mb-3">Inserir Ponto</h4>
-                        <div className="space-y-2">
-                            <input placeholder="Coord X" className="w-full text-xs p-1 rounded border bg-transparent" value={newPointData.x} onChange={e => setNewPointData({...newPointData, x: e.target.value})} autoFocus/>
-                            <input placeholder="Coord Y" className="w-full text-xs p-1 rounded border bg-transparent" value={newPointData.y} onChange={e => setNewPointData({...newPointData, y: e.target.value})}/>
-                            <input placeholder="Cota Z" className="w-full text-xs p-1 rounded border bg-transparent" value={newPointData.z} onChange={e => setNewPointData({...newPointData, z: e.target.value})}/>
-                            <input placeholder="Descrição" className="w-full text-xs p-1 rounded border bg-transparent" value={newPointData.desc} onChange={e => setNewPointData({...newPointData, desc: e.target.value})}/>
-                            <div className="flex gap-2 pt-2">
-                                <button onClick={() => setShowPointModal(false)} className="flex-1 py-1 text-xs opacity-60 hover:opacity-100">Cancelar</button>
-                                <button onClick={handleManualAddPoint} className="flex-1 py-1 bg-cad-accent text-white text-xs font-bold rounded">Adicionar</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
+         </div>
+         <div className="bg-zinc-900 p-6 rounded-xl border border-white/10 flex flex-col justify-center items-center text-center">
+            <div className="text-xs font-bold text-zinc-500 uppercase mb-2">Volume Total Estimado</div>
+            <div className="text-4xl font-black text-white font-mono mb-1">{volume.toFixed(2)} m³</div>
+            <div className={`px-3 py-1 rounded-full text-xs font-bold ${type === 'CORTE' ? 'bg-red-500/20 text-red-500' : 'bg-blue-500/20 text-blue-500'}`}>{type} NECESSÁRIO</div>
          </div>
       </div>
     </div>
   );
 };
 
-// --- Version Control Modal ---
-const VersionControlModal = ({ currentData, onLoad, onClose, theme }: any) => {
-    const isDark = theme === 'dark';
-    const [snapshots, setSnapshots] = useState<ProjectSnapshot[]>([]);
-    const [newName, setNewName] = useState('');
+const Logo = () => (
+  <div className="h-16 flex items-center px-6 border-b border-white/5 gap-3">
+    <div className="w-8 h-8 bg-cad-accent rounded-lg flex items-center justify-center text-white font-bold shadow-lg shadow-cad-accent/20">
+      <Hexagon size={20} className="fill-current" />
+    </div>
+    <div className="flex flex-col">
+      <span className="text-lg font-bold text-white tracking-tight leading-none">GeoMaster</span>
+      <span className="text-[10px] text-zinc-500 font-mono tracking-widest uppercase">Survey CAD</span>
+    </div>
+  </div>
+);
 
-    useEffect(() => {
-        const saved = localStorage.getItem('geoPro_snapshots');
-        if (saved) setSnapshots(JSON.parse(saved));
-    }, []);
+// --- CSV Import Modal ---
+const CSVImportModal = ({ onClose, onImport }: { onClose: () => void, onImport: (points: Point[]) => void }) => {
+    const [file, setFile] = useState<File | null>(null);
+    const [preview, setPreview] = useState<string[][]>([]);
+    const [mappingName, setMappingName] = useState('');
+    const [savedMappings, setSavedMappings] = useState<Record<string, CsvMapping>>(() => {
+        const saved = localStorage.getItem('csv_mappings_db');
+        return saved ? JSON.parse(saved) : {};
+    });
+    const [errors, setErrors] = useState<string[]>([]);
+    
+    // Default mapping
+    const [mapping, setMapping] = useState<CsvMapping>({
+        id: 0, name: 1, n: 2, e: 3, z: 4, desc: 5, separator: ';', hasHeader: true
+    });
 
-    const saveSnapshot = () => {
-        if (!newName.trim()) return;
-        const newSnapshot: ProjectSnapshot = {
-            id: Date.now().toString(),
-            name: newName,
-            date: Date.now(),
-            data: currentData
-        };
-        const updated = [newSnapshot, ...snapshots];
-        setSnapshots(updated);
-        localStorage.setItem('geoPro_snapshots', JSON.stringify(updated));
-        setNewName('');
-    };
-
-    const deleteSnapshot = (id: string) => {
-        const updated = snapshots.filter(s => s.id !== id);
-        setSnapshots(updated);
-        localStorage.setItem('geoPro_snapshots', JSON.stringify(updated));
-    };
-
-    return (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className={`rounded-xl w-full max-w-md shadow-2xl flex flex-col max-h-[80vh] border animate-in fade-in zoom-in-95 ${isDark ? 'bg-cad-panel border-cad-border text-cad-text' : 'bg-white border-slate-200 text-slate-900'}`}>
-                <div className="p-4 border-b border-inherit flex justify-between items-center">
-                    <h3 className="font-bold text-lg flex items-center gap-2"><Clock size={18}/> Versões do Projeto</h3>
-                    <button onClick={onClose}><Trash2 size={18} className="opacity-0 pointer-events-none" /></button> {/* Hidden for layout */}
-                    <button onClick={onClose} className="opacity-50 hover:opacity-100">✕</button>
-                </div>
-                <div className="p-4 border-b border-inherit bg-opacity-50 bg-black/5">
-                    <div className="flex gap-2">
-                        <input 
-                            value={newName}
-                            onChange={(e) => setNewName(e.target.value)}
-                            placeholder="Nome da versão (ex: Final Rev 1)"
-                            className={`flex-1 px-3 py-2 text-sm rounded border ${isDark ? 'bg-black/20 border-white/10' : 'bg-white border-slate-300'}`}
-                        />
-                        <button onClick={saveSnapshot} className="bg-cad-accent text-white px-4 py-2 rounded text-sm font-bold hover:brightness-110">Salvar</button>
-                    </div>
-                </div>
-                <div className="flex-1 overflow-auto p-4 space-y-2">
-                    {snapshots.length === 0 && <div className="text-center opacity-50 text-sm py-4">Nenhuma versão salva.</div>}
-                    {snapshots.map(snap => (
-                        <div key={snap.id} className={`p-3 rounded border flex justify-between items-center group ${isDark ? 'border-white/10 hover:bg-white/5' : 'border-slate-200 hover:bg-slate-50'}`}>
-                            <div>
-                                <div className="font-bold text-sm">{snap.name}</div>
-                                <div className="text-xs opacity-60">{new Date(snap.date).toLocaleString()} • {snap.data.points.length} pts</div>
-                            </div>
-                            <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <button onClick={() => onLoad(snap)} className="p-1.5 hover:bg-cad-accent/20 hover:text-cad-accent rounded" title="Carregar"><Upload size={14}/></button>
-                                <button onClick={() => deleteSnapshot(snap.id)} className="p-1.5 hover:bg-red-500/20 hover:text-red-500 rounded" title="Excluir"><Trash2 size={14}/></button>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            </div>
-        </div>
-    );
-};
-
-// --- Memorial Generator ---
-const MemorialGenerator = ({ metadata, points, polygons, selectedIds, theme }: any) => {
-    const isDark = theme === 'dark';
-    const [reportText, setReportText] = useState('');
-
-    useEffect(() => {
-        let text = `MEMORIAL DESCRITIVO\n\n`;
-        text += `PROJETO: ${metadata.title.toUpperCase()}\n`;
-        text += `LOCAL: ${metadata.location}\n`;
-        text += `PROPRIETÁRIO: ${metadata.owner}\n`;
-        text += `RESP. TÉCNICO: ${metadata.professional} (CREA: ${metadata.crea})\n`;
-        text += `DATA: ${new Date().toLocaleDateString()}\n`;
-        text += `------------------------------------------------------------\n\n`;
-
-        // Determine if we are describing a polygon or just a sequence of points
-        const selectedPoly = polygons.find((p: any) => selectedIds.has(p.id));
+    const validateMapping = () => {
+        const errs: string[] = [];
+        const required = ['id', 'name', 'n', 'e', 'z', 'desc'];
         
-        if (selectedPoly) {
-            text += `DESCRIÇÃO PERIMÉTRICA - ${selectedPoly.id.toUpperCase()}\n\n`;
-            text += `Inicia-se a descrição deste perímetro no vértice inicial, de coordenadas N=${selectedPoly.points[0].y.toFixed(3)}m e E=${selectedPoly.points[0].x.toFixed(3)}m.\n`;
-            
-            for (let i = 0; i < selectedPoly.points.length; i++) {
-                const current = selectedPoly.points[i];
-                const next = selectedPoly.points[(i + 1) % selectedPoly.points.length];
-                const dist = Math.sqrt((next.x - current.x)**2 + (next.y - current.y)**2);
-                const az = calculateAzimuth(current, next);
-                
-                text += `Deste, segue com azimute de ${toDMS(az)} e distância de ${dist.toFixed(2)}m até o vértice seguinte (N=${next.y.toFixed(3)}m, E=${next.x.toFixed(3)}m).\n`;
+        required.forEach(field => {
+            const idx = mapping[field as keyof CsvMapping];
+            if (typeof idx !== 'number' || isNaN(idx)) {
+                errs.push(`Campo '${field}' deve ser um número.`);
+            } else if (idx < 0) {
+                errs.push(`Campo '${field}' não pode ser negativo.`);
             }
-            text += `\nÁrea Total: ${(selectedPoly.area/10000).toFixed(4)} ha (${selectedPoly.area.toFixed(2)} m²).\n`;
-            text += `Perímetro: ${selectedPoly.perimeter.toFixed(2)} m.\n`;
-        } else {
-            text += `LISTAGEM DE COORDENADAS\n\n`;
-            text += `VÉRTICE\t\tESTE (X)\t\tNORTE (Y)\t\tCOTA (Z)\tDESCRIÇÃO\n`;
-            points.forEach((p: any) => {
-                text += `${p.id.padEnd(10)}\t${p.x.toFixed(3)}\t${p.y.toFixed(3)}\t${p.z.toFixed(3)}\t${p.desc}\n`;
-            });
+        });
+
+        if (file && preview.length > 0) {
+            const maxCol = preview[0].length - 1;
+             required.forEach(field => {
+                const idx = mapping[field as keyof CsvMapping] as number;
+                if (idx > maxCol) {
+                    errs.push(`Índice ${idx} do campo '${field}' excede colunas do arquivo (máx: ${maxCol}).`);
+                }
+             });
         }
+        
+        setErrors(errs);
+        return errs.length === 0;
+    };
 
-        setReportText(text);
-    }, [metadata, points, polygons, selectedIds]);
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files[0]) {
+            const f = e.target.files[0];
+            setFile(f);
+            setErrors([]);
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+                const text = evt.target?.result as string;
+                const lines = text.split('\n').slice(0, 5).map(l => l.split(mapping.separator));
+                setPreview(lines);
+            };
+            reader.readAsText(f);
+        }
+    };
 
-    const downloadReport = () => {
-        const blob = new Blob([reportText], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `Memorial_${metadata.title.replace(/\s+/g, '_')}.txt`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+    const handleSaveMapping = () => {
+        if (!validateMapping()) return;
+        if (!mappingName) return;
+        const newMappings = { ...savedMappings, [mappingName]: mapping };
+        setSavedMappings(newMappings);
+        localStorage.setItem('csv_mappings_db', JSON.stringify(newMappings));
+        setMappingName('');
+    };
+
+    const handleLoadMapping = (name: string) => {
+        if (savedMappings[name]) {
+            setMapping(savedMappings[name]);
+            setErrors([]);
+        }
+    };
+
+    const handleImport = () => {
+        if (!file) return;
+        if (!validateMapping()) return;
+
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+            const text = evt.target?.result as string;
+            const lines = text.split('\n');
+            const newPoints: Point[] = [];
+            const startIdx = mapping.hasHeader ? 1 : 0;
+            const today = new Date().toISOString().split('T')[0];
+            const importErrors: string[] = [];
+
+            for (let i = startIdx; i < lines.length; i++) {
+                const cols = lines[i].split(mapping.separator);
+                if (cols.length < 3) continue;
+
+                const n = parseFloat(cols[mapping.n]);
+                const e = parseFloat(cols[mapping.e]);
+                const z = parseFloat(cols[mapping.z]);
+
+                if (!isValidCoordinate(n) || !isValidCoordinate(e)) {
+                    importErrors.push(`Linha ${i + 1}: Coordenadas inválidas (NaN)`);
+                    continue;
+                }
+                if (!isValidNorth(n)) {
+                     importErrors.push(`Linha ${i + 1}: Norte (${n}) fora do intervalo esperado (6M-10M)`);
+                     continue;
+                }
+                if (!isValidEast(e)) {
+                     importErrors.push(`Linha ${i + 1}: Leste (${e}) fora do intervalo esperado (100k-900k)`);
+                     continue;
+                }
+
+                newPoints.push({
+                    id: cols[mapping.id] || `P-${i}`,
+                    name: cols[mapping.name] || `P-${i}`,
+                    n, e, z: isValidCoordinate(z) ? z : 0,
+                    desc: cols[mapping.desc] || '',
+                    date: today
+                });
+            }
+
+            if (importErrors.length > 0 && newPoints.length === 0) {
+                setErrors(importErrors.slice(0, 5).concat(importErrors.length > 5 ? [`...e mais ${importErrors.length - 5} erros.`] : []));
+                return;
+            } else if (importErrors.length > 0) {
+                 alert(`Importação parcial realizada. ${importErrors.length} linhas ignoradas.`);
+            }
+
+            onImport(newPoints);
+            onClose();
+        };
+        reader.readAsText(file);
     };
 
     return (
-        <div className={`h-full flex flex-col p-6 ${isDark ? 'bg-cad-bg text-cad-text' : 'bg-slate-50 text-slate-800'}`}>
-            <div className="flex justify-between items-center mb-4">
-                <h3 className="font-bold text-lg flex items-center gap-2"><FileText size={20} className="text-cad-accent"/> Memorial Descritivo Simplificado</h3>
-                <button onClick={downloadReport} className="bg-cad-accent text-white px-4 py-2 rounded text-sm font-bold hover:brightness-110 flex items-center gap-2"><Download size={16}/> Baixar .TXT</button>
-            </div>
-            <div className={`flex-1 border rounded-lg p-4 font-mono text-xs overflow-auto whitespace-pre-wrap leading-relaxed ${isDark ? 'bg-black/20 border-white/10' : 'bg-white border-slate-200'}`}>
-                {reportText}
-            </div>
-            <div className="mt-4 text-xs opacity-50 text-center">
-                * Selecione um polígono no mapa para gerar a descrição perimétrica (azimutes e distâncias). Caso contrário, será listada a tabela de coordenadas.
-            </div>
-        </div>
-    );
-};
+        <ModalWindow title="Importar Arquivo CSV" icon={Upload} onClose={onClose}>
+            <div className="space-y-6">
+                 {errors.length > 0 && (
+                    <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+                        <div className="flex items-center gap-2 text-red-400 font-bold text-xs mb-1">
+                            <AlertCircle size={14}/> Erros de Validação
+                        </div>
+                        <ul className="list-disc list-inside text-xs text-red-300">
+                            {errors.map((e, i) => <li key={i}>{e}</li>)}
+                        </ul>
+                    </div>
+                 )}
 
-// --- Helper Components & Restored Full Components ---
+                 {/* Saved Mappings Control */}
+                 <div className="bg-zinc-900 p-4 rounded-xl border border-white/10 flex gap-4 items-end">
+                    <div className="flex-1 space-y-2">
+                        <label className="text-[10px] font-bold text-zinc-500 uppercase">Mapeamentos Salvos</label>
+                        <select onChange={(e) => handleLoadMapping(e.target.value)} className="w-full bg-black/30 border border-white/10 rounded p-2 text-xs text-white">
+                            <option value="">Selecione um perfil...</option>
+                            {Object.keys(savedMappings).map(k => <option key={k} value={k}>{k}</option>)}
+                        </select>
+                    </div>
+                    <div className="flex-1 space-y-2">
+                         <label className="text-[10px] font-bold text-zinc-500 uppercase">Salvar Configuração Atual</label>
+                         <div className="flex gap-2">
+                            <input type="text" placeholder="Nome do perfil..." value={mappingName} onChange={e => setMappingName(e.target.value)} className="w-full bg-black/30 border border-white/10 rounded p-2 text-xs text-white" />
+                            <button onClick={handleSaveMapping} className="p-2 bg-zinc-800 text-white rounded hover:bg-cad-accent transition-colors"><Save size={14}/></button>
+                         </div>
+                    </div>
+                 </div>
 
-const ToolGroup = ({ children }: any) => <div className="flex gap-1">{children}</div>;
-const Separator = ({ theme }: any) => <div className={`w-px h-5 mx-1 ${theme === 'dark' ? 'bg-white/10' : 'bg-slate-300'}`}></div>;
-const ToolbarBtn = ({ icon, active, onClick, name, desc, disabled, theme, onHover }: any) => {
-    const isDark = theme === 'dark';
-    return (
-        <button 
-            onClick={onClick} 
-            disabled={disabled} 
-            onMouseEnter={() => onHover && onHover({name, description: desc})}
-            onMouseLeave={() => onHover && onHover(null)}
-            className={`p-1.5 rounded transition-colors duration-150 flex items-center justify-center ${disabled ? 'opacity-30 cursor-not-allowed' : ''} ${active ? (isDark ? 'bg-cad-accent text-white shadow-glow' : 'bg-blue-100 text-blue-700') : (isDark ? 'text-cad-muted hover:text-white hover:bg-white/10' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900')}`}
-        >
-            {icon}
-        </button>
-    )
-};
-const NavBtn = ({ active, onClick, icon, label, theme }: any) => {
-    const isDark = theme === 'dark';
-    return (
-        <button onClick={onClick} className={`w-full flex items-center space-x-3 px-3 py-2 rounded-md text-xs font-medium transition-all ${active ? (isDark ? 'bg-cad-accent/10 text-cad-accent border border-cad-accent/20' : 'bg-brand-50 text-brand-700 border border-brand-200') : (isDark ? 'text-cad-muted hover:bg-white/5 hover:text-white' : 'text-slate-500 hover:bg-slate-50')}`}>{icon}<span>{label}</span></button>
+                <div className="border-2 border-dashed border-white/10 rounded-xl p-8 text-center hover:border-cad-accent transition-colors">
+                    <input type="file" accept=".csv,.txt" onChange={handleFileChange} className="hidden" id="csv-upload" />
+                    <label htmlFor="csv-upload" className="cursor-pointer flex flex-col items-center">
+                        <Upload size={32} className="text-zinc-500 mb-2" />
+                        <span className="text-sm font-bold text-white">Clique para selecionar</span>
+                        <span className="text-xs text-zinc-500">Arquivos .CSV ou .TXT</span>
+                    </label>
+                    {file && <div className="mt-4 text-xs bg-emerald-500/10 text-emerald-500 px-2 py-1 rounded inline-block">{file.name}</div>}
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                   <div className="space-y-2">
+                      <label className="text-xs font-bold text-zinc-500">Separador</label>
+                      <select value={mapping.separator} onChange={e => setMapping({...mapping, separator: e.target.value})} className="w-full bg-zinc-900 border border-white/10 rounded p-2 text-sm text-white">
+                          <option value=";">Ponto e Vírgula (;)</option>
+                          <option value=",">Vírgula (,)</option>
+                          <option value="\t">Tabulação</option>
+                      </select>
+                   </div>
+                   <div className="flex items-center gap-2 pt-6">
+                       <input type="checkbox" checked={mapping.hasHeader} onChange={e => setMapping({...mapping, hasHeader: e.target.checked})} className="rounded bg-zinc-900 border-white/10" />
+                       <label className="text-sm text-zinc-300">Ignorar primeira linha (Cabeçalho)</label>
+                   </div>
+                </div>
+
+                {preview.length > 0 && (
+                    <div className="space-y-4">
+                        <h4 className="text-xs font-bold text-white uppercase border-b border-white/10 pb-2">Mapeamento de Colunas</h4>
+                        <div className="grid grid-cols-3 gap-4">
+                            {[
+                                { k: 'id', l: 'ID / Índice' }, { k: 'name', l: 'Nome do Ponto' },
+                                { k: 'n', l: 'Norte (Y)' }, { k: 'e', l: 'Leste (X)' },
+                                { k: 'z', l: 'Cota (Z)' }, { k: 'desc', l: 'Descrição' }
+                            ].map((f) => (
+                                <div key={f.k} className="space-y-1">
+                                    <label className="text-[10px] font-bold text-zinc-500 uppercase">{f.l}</label>
+                                    <input 
+                                        type="number" 
+                                        value={mapping[f.k as keyof CsvMapping] as number}
+                                        onChange={e => setMapping({...mapping, [f.k]: parseInt(e.target.value)})}
+                                        className="w-full bg-zinc-900 border border-white/10 rounded p-2 text-xs text-white"
+                                        placeholder="Col Index"
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                        <div className="mt-4 bg-black/30 p-2 rounded text-xs font-mono text-zinc-400 overflow-x-auto">
+                            <div className="mb-1 text-zinc-500">Prévia (5 linhas):</div>
+                            {preview.map((row, i) => (
+                                <div key={i} className="whitespace-nowrap">{row.join(' | ')}</div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                <div className="flex justify-end gap-2 pt-4 border-t border-white/10">
+                    <button onClick={onClose} className="px-4 py-2 text-sm text-zinc-400 hover:text-white">Cancelar</button>
+                    <button onClick={handleImport} className="px-4 py-2 bg-cad-accent text-white rounded font-bold text-sm hover:brightness-110 shadow-lg">Importar Dados</button>
+                </div>
+            </div>
+        </ModalWindow>
     )
 }
 
-const ResizableTh = ({ width, onResize, children, className }: any) => {
+// --- New Point Modal with Validation ---
+const NewPointModal = ({ onClose, onSave }: { onClose: () => void, onSave: (p: Point) => void }) => {
+    const [form, setForm] = useState({ name: '', n: '', e: '', z: '', desc: '' });
+    const [errors, setErrors] = useState<Record<string, string>>({});
+
+    const handleSubmit = () => {
+        const newErrors: Record<string, string> = {};
+        if (!form.name) newErrors.name = 'Nome é obrigatório';
+        
+        const n = parseFloat(form.n);
+        const e = parseFloat(form.e);
+        const z = parseFloat(form.z);
+
+        if (!isValidCoordinate(form.n)) newErrors.n = 'Norte inválido';
+        else if (!isValidNorth(n)) newErrors.n = 'Norte fora da faixa UTM (6M-10M)';
+
+        if (!isValidCoordinate(form.e)) newErrors.e = 'Leste inválido';
+        else if (!isValidEast(e)) newErrors.e = 'Leste fora da faixa UTM (100k-900k)';
+
+        if (!isValidCoordinate(form.z)) newErrors.z = 'Cota inválida';
+
+        if (Object.keys(newErrors).length > 0) {
+            setErrors(newErrors);
+            return;
+        }
+
+        onSave({
+            id: `M-${Date.now()}`,
+            name: form.name,
+            n: n,
+            e: e,
+            z: z,
+            desc: form.desc,
+            date: new Date().toISOString().split('T')[0]
+        });
+        onClose();
+    };
+
+    return (
+        <ModalWindow title="Adicionar Novo Ponto" icon={Plus} onClose={onClose}>
+            <div className="space-y-4">
+                <div>
+                    <label className="text-xs font-bold text-zinc-500 uppercase block mb-1">Nome do Ponto</label>
+                    <input type="text" value={form.name} onChange={e => setForm({...form, name: e.target.value})} className="w-full bg-zinc-900 border border-white/10 rounded p-2 text-sm text-white" />
+                    {errors.name && <span className="text-red-500 text-xs">{errors.name}</span>}
+                </div>
+                <div className="grid grid-cols-3 gap-4">
+                    <div>
+                        <label className="text-xs font-bold text-zinc-500 uppercase block mb-1">Norte (Y)</label>
+                        <input type="number" value={form.n} onChange={e => setForm({...form, n: e.target.value})} className="w-full bg-zinc-900 border border-white/10 rounded p-2 text-sm text-white font-mono" />
+                        {errors.n && <span className="text-red-500 text-xs">{errors.n}</span>}
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-zinc-500 uppercase block mb-1">Leste (X)</label>
+                        <input type="number" value={form.e} onChange={e => setForm({...form, e: e.target.value})} className="w-full bg-zinc-900 border border-white/10 rounded p-2 text-sm text-white font-mono" />
+                        {errors.e && <span className="text-red-500 text-xs">{errors.e}</span>}
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-zinc-500 uppercase block mb-1">Cota (Z)</label>
+                        <input type="number" value={form.z} onChange={e => setForm({...form, z: e.target.value})} className="w-full bg-zinc-900 border border-white/10 rounded p-2 text-sm text-white font-mono" />
+                         {errors.z && <span className="text-red-500 text-xs">{errors.z}</span>}
+                    </div>
+                </div>
+                <div>
+                    <label className="text-xs font-bold text-zinc-500 uppercase block mb-1">Descrição</label>
+                    <input type="text" value={form.desc} onChange={e => setForm({...form, desc: e.target.value})} className="w-full bg-zinc-900 border border-white/10 rounded p-2 text-sm text-white" />
+                </div>
+                <div className="flex justify-end gap-2 pt-4 border-t border-white/10">
+                    <button onClick={onClose} className="px-4 py-2 text-sm text-zinc-400 hover:text-white">Cancelar</button>
+                    <button onClick={handleSubmit} className="px-4 py-2 bg-cad-accent text-white rounded font-bold text-sm hover:brightness-110 shadow-lg">Adicionar</button>
+                </div>
+            </div>
+        </ModalWindow>
+    )
+}
+
+// --- Version Control Modal ---
+const VersionControlModal = ({ onClose, currentPoints, onLoad }: { onClose: () => void, currentPoints: Point[], onLoad: (pts: Point[]) => void }) => {
+    const [versions, setVersions] = useState<ProjectVersion[]>(() => {
+        const saved = localStorage.getItem('project_versions');
+        return saved ? JSON.parse(saved) : [];
+    });
+    const [newVersionName, setNewVersionName] = useState('');
+
+    const saveVersion = () => {
+        if (!newVersionName.trim()) return;
+        const newVersion: ProjectVersion = {
+            id: Date.now().toString(),
+            name: newVersionName,
+            date: new Date().toLocaleString(),
+            points: currentPoints
+        };
+        const updated = [newVersion, ...versions];
+        setVersions(updated);
+        localStorage.setItem('project_versions', JSON.stringify(updated));
+        setNewVersionName('');
+    };
+
+    const loadVersion = (v: ProjectVersion) => {
+        if(confirm(`Carregar versão "${v.name}"? Dados não salvos serão perdidos.`)) {
+            onLoad(v.points);
+            onClose();
+        }
+    };
+
+    const deleteVersion = (id: string) => {
+        const updated = versions.filter(v => v.id !== id);
+        setVersions(updated);
+        localStorage.setItem('project_versions', JSON.stringify(updated));
+    };
+
+    return (
+        <ModalWindow title="Controle de Versão" icon={History} onClose={onClose}>
+            <div className="space-y-6">
+                <div className="bg-zinc-900 p-4 rounded-xl border border-white/10 space-y-2">
+                    <label className="text-xs font-bold text-zinc-500 uppercase">Salvar Snapshot Atual</label>
+                    <div className="flex gap-2">
+                        <input 
+                            type="text" 
+                            placeholder="Nome da versão (ex: Final, Revisão 1)..." 
+                            value={newVersionName} 
+                            onChange={e => setNewVersionName(e.target.value)} 
+                            className="flex-1 bg-black/30 border border-white/10 rounded p-2 text-sm text-white outline-none focus:border-cad-accent"
+                        />
+                        <button onClick={saveVersion} className="px-4 bg-cad-accent text-white rounded font-bold text-sm hover:brightness-110">Salvar</button>
+                    </div>
+                </div>
+
+                <div className="space-y-2">
+                    <h4 className="text-xs font-bold text-zinc-500 uppercase border-b border-white/10 pb-2">Histórico de Versões</h4>
+                    <div className="max-h-60 overflow-y-auto space-y-2">
+                        {versions.length === 0 && <div className="text-zinc-500 text-sm py-4 text-center italic">Nenhuma versão salva.</div>}
+                        {versions.map(v => (
+                            <div key={v.id} className="flex items-center justify-between p-3 bg-zinc-900/50 hover:bg-zinc-800 rounded-lg border border-white/5 group transition-colors">
+                                <div>
+                                    <div className="text-sm font-bold text-white">{v.name}</div>
+                                    <div className="text-xs text-zinc-500">{v.date} • {v.points.length} pontos</div>
+                                </div>
+                                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button onClick={() => loadVersion(v)} className="p-1.5 bg-emerald-500/20 text-emerald-500 rounded hover:bg-emerald-500/30" title="Carregar"><RefreshCw size={14}/></button>
+                                    <button onClick={() => deleteVersion(v.id)} className="p-1.5 bg-red-500/20 text-red-500 rounded hover:bg-red-500/30" title="Excluir"><Trash2 size={14}/></button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        </ModalWindow>
+    );
+};
+
+// --- Visual Settings Modal ---
+const SettingsModal = ({ 
+    settings, onSave, onClose, layerConfigs, setLayerConfigs 
+}: { 
+    settings: VisualSettings, 
+    onSave: (s: VisualSettings) => void, 
+    onClose: () => void,
+    layerConfigs: Record<string, LayerConfig>,
+    setLayerConfigs: React.Dispatch<React.SetStateAction<Record<string, LayerConfig>>>
+}) => {
+    const [local, setLocal] = useState(settings);
+    
+    return (
+        <ModalWindow title="Configurações Visuais" icon={Palette} onClose={onClose}>
+            <div className="space-y-6">
+                <div className="space-y-4">
+                    <div className="space-y-2">
+                        <label className="text-xs font-bold text-zinc-500 uppercase">Tamanho do Ponto</label>
+                        <div className="flex items-center gap-4">
+                            <input type="range" min="1" max="10" step="0.5" value={local.pointSize} onChange={e => setLocal({...local, pointSize: Number(e.target.value)})} className="flex-1 h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer"/>
+                            <span className="text-sm font-mono text-white w-8">{local.pointSize}px</span>
+                        </div>
+                    </div>
+                    <div className="h-px bg-white/10"></div>
+                    <div className="grid grid-cols-2 gap-4">
+                         <div className="space-y-2">
+                            <label className="text-xs font-bold text-zinc-500 uppercase">Cor de Seleção</label>
+                            <div className="flex items-center gap-2">
+                                <input type="color" value={local.selectedColor} onChange={e => setLocal({...local, selectedColor: e.target.value})} className="w-8 h-8 rounded border-none bg-transparent cursor-pointer" />
+                                <span className="text-xs text-zinc-400 uppercase">{local.selectedColor}</span>
+                            </div>
+                        </div>
+                         <div className="space-y-2">
+                            <label className="text-xs font-bold text-zinc-500 uppercase">Cor de Hover</label>
+                            <div className="flex items-center gap-2">
+                                <input type="color" value={local.hoverColor} onChange={e => setLocal({...local, hoverColor: e.target.value})} className="w-8 h-8 rounded border-none bg-transparent cursor-pointer" />
+                                <span className="text-xs text-zinc-400 uppercase">{local.hoverColor}</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="h-px bg-white/10"></div>
+                    <div>
+                        <h4 className="text-xs font-bold text-zinc-500 uppercase mb-3">Cores das Camadas (Layer)</h4>
+                        <div className="grid grid-cols-2 gap-3 max-h-48 overflow-y-auto pr-2">
+                            {Object.entries(layerConfigs).map(([desc, config]) => (
+                                <div key={desc} className="flex items-center justify-between bg-zinc-900 p-2 rounded border border-white/5">
+                                    <span className="text-xs text-white truncate w-24">{desc}</span>
+                                    <input type="color" value={config.color} onChange={(e) => setLayerConfigs(prev => ({...prev, [desc]: {...prev[desc], color: e.target.value}}))} className="w-6 h-6 rounded border-none bg-transparent cursor-pointer" />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                </div>
+                 <div className="flex justify-end gap-2 pt-4 border-t border-white/10">
+                    <button onClick={onClose} className="px-4 py-2 text-sm text-zinc-400 hover:text-white">Cancelar</button>
+                    <button onClick={() => { onSave(local); onClose(); }} className="px-4 py-2 bg-cad-accent text-white rounded font-bold text-sm hover:brightness-110 shadow-lg">Salvar Preferências</button>
+                </div>
+            </div>
+        </ModalWindow>
+    )
+}
+
+// --- Main 3D Scene Component ---
+const Scene3D = ({ points, layers }: { 
+  points: Point[], 
+  layers: Record<string, LayerConfig>
+}) => {
+  const centerN = useMemo(() => points.reduce((acc, p) => acc + p.n, 0) / points.length, [points]);
+  const centerE = useMemo(() => points.reduce((acc, p) => acc + p.e, 0) / points.length, [points]);
+  const minZ = useMemo(() => Math.min(...points.map(p => p.z)), [points]);
+
   return (
-    <th style={{ width }} className={`relative group ${className}`}>
-      {children}
-      <div 
-        className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-cad-accent group-hover:bg-white/20 transition-colors z-20"
-        onMouseDown={onResize}
-      />
-    </th>
+    <>
+      <ambientLight intensity={0.5} />
+      <pointLight position={[100, 100, 100]} intensity={1} />
+      <gridHelper args={[200, 20, 0x444444, 0x222222]} position={[0, -2, 0]} />
+      <OrbitControls makeDefault />
+
+      {points.map((p) => {
+        const config = layers[p.desc] || { color: '#ffffff', visible: true };
+        if (!config.visible) return null;
+        const x = (p.e - centerE);
+        const y = (p.z - minZ) * 2;
+        const z = -(p.n - centerN);
+
+        return (
+          <group key={p.id} position={[x, y, z]}>
+            <mesh>
+              <sphereGeometry args={[0.8, 16, 16]} />
+              <meshStandardMaterial color={config.color} />
+            </mesh>
+            <Html distanceFactor={15}>
+              <div className="bg-black/80 text-white text-[10px] px-1 rounded pointer-events-none whitespace-nowrap border border-white/10">
+                {p.name}
+              </div>
+            </Html>
+            <mesh position={[0, -y/2 - 1, 0]}>
+               <cylinderGeometry args={[0.05, 0.05, y + 2, 4]} />
+               <meshBasicMaterial color={config.color} opacity={0.3} transparent />
+            </mesh>
+          </group>
+        );
+      })}
+       <line>
+          <bufferGeometry>
+            <bufferAttribute
+              attach="attributes-position"
+              count={points.filter(p => layers[p.desc]?.visible).length}
+              array={new Float32Array(points.flatMap(p => {
+                 if (!layers[p.desc]?.visible) return [];
+                 return [(p.e - centerE), (p.z - minZ) * 2, -(p.n - centerN)];
+              }))}
+              itemSize={3}
+            />
+          </bufferGeometry>
+          <lineBasicMaterial color="#ffffff" opacity={0.1} transparent />
+       </line>
+    </>
   );
 };
 
-const DataEditor = ({ points, setPoints, metadata, setMetadata, selectedIds, setSelectedIds, theme }: any) => {
-    const isDark = theme === 'dark';
-    const [colWidths, setColWidths] = useState({ id: 80, x: 100, y: 100, z: 80, desc: 150 });
-    const [zBase, setZBase] = useState(0);
-    const [zMult, setZMult] = useState(1);
-    
-    // Resize Logic
-    const startResize = (e: React.MouseEvent, col: keyof typeof colWidths) => {
-        const startX = e.clientX;
-        const startWidth = colWidths[col];
-        const onMove = (mv: MouseEvent) => {
-            setColWidths(prev => ({ ...prev, [col]: Math.max(50, startWidth + (mv.clientX - startX)) }));
-        };
-        const onUp = () => {
-            window.removeEventListener('mousemove', onMove);
-            window.removeEventListener('mouseup', onUp);
-        };
-        window.addEventListener('mousemove', onMove);
-        window.addEventListener('mouseup', onUp);
-    };
+function App() {
+  const [activeTab, setActiveTab] = useState<'dados' | 'mapa' | 'ferramentas' | 'relatorios'>('dados');
+  const [points, setPoints] = useState<Point[]>(INITIAL_POINTS);
+  const [searchTerm, setSearchTerm] = useState('');
+  
+  // -- Tools State --
+  const [activeTool, setActiveTool] = useState<ToolType>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showNewPointModal, setShowNewPointModal] = useState(false);
+  const [showVersionModal, setShowVersionModal] = useState(false);
+  const [isSplitting, setIsSplitting] = useState(false);
+  const [splitCandidate, setSplitCandidate] = useState<{idx: number, point: Point} | null>(null);
 
-    const applyZTransform = () => {
-        if (confirm(`Aplicar transformação em TODOS os ${points.length} pontos?\nNovo Z = (Z * ${zMult}) + ${zBase}`)) {
-            const newPoints = points.map((p: SurveyPoint) => ({
-                ...p,
-                z: (p.z * zMult) + zBase
-            }));
-            setPoints(newPoints);
-        }
-    };
+  // -- Map State --
+  const [is3DMode, setIs3DMode] = useState(false);
+  const [mapZoom, setMapZoom] = useState(1);
+  const [mapPan, setMapPan] = useState({ x: 0, y: 0 });
+  const [snapPoint, setSnapPoint] = useState<Point | null>(null);
+  const [snapMidpoint, setSnapMidpoint] = useState<{ point: {x: number, y: number}, label: string } | null>(null);
+  const [snapGrid, setSnapGrid] = useState<{ point: {x: number, y: number} } | null>(null);
+  const [showContours, setShowContours] = useState(false);
+  const [movingPointId, setMovingPointId] = useState<string | null>(null);
+  
+  // Filter State
+  const [dateRange, setDateRange] = useState({ start: '', end: '' });
 
-    const handlePointChange = (idx: number, field: keyof SurveyPoint, value: any) => {
-        const newPoints = [...points];
-        newPoints[idx] = { ...newPoints[idx], [field]: value };
-        setPoints(newPoints);
-    };
-    const toggleSelect = (id: string) => {
-        const newSet = new Set(selectedIds);
-        if (newSet.has(id)) newSet.delete(id); else newSet.add(id);
-        setSelectedIds(newSet);
-    };
+  // Visual Settings
+  const [visualSettings, setVisualSettings] = useState<VisualSettings>(() => {
+      const saved = localStorage.getItem('visual_settings');
+      return saved ? JSON.parse(saved) : { pointSize: 4, selectedColor: '#ffffff', hoverColor: '#fbbf24', snapColor: '#facc15' };
+  });
 
-    const exportCSV = () => {
-        const pointsToExport = selectedIds.size > 0 
-            ? points.filter((p: any) => selectedIds.has(p.id)) 
-            : points;
-        
-        let csv = "ID,X,Y,Z,DESCRIÇÃO\n";
-        pointsToExport.forEach((p: any) => {
-            csv += `${p.id},${p.x},${p.y},${p.z},${p.desc}\n`;
+  const updateVisualSettings = (newSettings: VisualSettings) => {
+      setVisualSettings(newSettings);
+      localStorage.setItem('visual_settings', JSON.stringify(newSettings));
+  };
+  
+  // Selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Snap Settings
+  const [snapSettings, setSnapSettings] = useState<SnapSettings>({
+      enabled: true,
+      vertices: true,
+      midpoints: true,
+      grid: false,
+      distance: 15
+  });
+  
+  const [savedViews, setSavedViews] = useState<SavedView[]>([]);
+  const [viewNameInput, setViewNameInput] = useState('');
+  const [showSaveViewDialog, setShowSaveViewDialog] = useState(false);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+
+  // -- Table Column Widths --
+  const [colWidths, setColWidths] = useState({ id: 60, name: 100, n: 120, e: 120, z: 100, desc: 150 });
+  // -- Z Transform --
+  const [zTransform, setZTransform] = useState({ base: 0, multiplier: 1 });
+
+  // -- Layers State --
+  const uniqueDescs = useMemo(() => [...new Set(points.map(p => p.desc))], [points]);
+  const [layerConfigs, setLayerConfigs] = useState<Record<string, LayerConfig>>(() => {
+    // Load from local storage or default
+    const saved = localStorage.getItem('layer_configs');
+    if (saved) {
+        // Merge with current descs to ensure we have all keys
+        const parsed = JSON.parse(saved);
+        const merged: Record<string, LayerConfig> = {};
+        const colors = ['#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+        uniqueDescs.forEach((desc, i) => {
+            merged[desc] = parsed[desc] || { color: colors[i % colors.length], visible: true };
         });
+        return merged;
+    }
+    const initial: Record<string, LayerConfig> = {};
+    const colors = ['#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+    uniqueDescs.forEach((desc, i) => {
+      initial[desc] = { color: colors[i % colors.length], visible: true };
+    });
+    return initial;
+  });
 
-        const dateStr = new Date().toISOString().slice(0, 10);
-        const fileName = `${metadata.title.replace(/\s+/g, '_')}_${dateStr}.csv`;
+  // Persist Layer Configs
+  useEffect(() => {
+      localStorage.setItem('layer_configs', JSON.stringify(layerConfigs));
+  }, [layerConfigs]);
 
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = fileName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+  const filteredPoints = useMemo(() => {
+    return points.filter(p => {
+        const matchText = p.name.toLowerCase().includes(searchTerm.toLowerCase()) || p.desc.toLowerCase().includes(searchTerm.toLowerCase());
+        const matchDate = (!dateRange.start || p.date >= dateRange.start) && (!dateRange.end || p.date <= dateRange.end);
+        return matchText && matchDate;
+    });
+  }, [points, searchTerm, dateRange]);
+
+  // --- Helpers ---
+  const getMapExtent = () => {
+    const ns = points.map(p => p.n);
+    const es = points.map(p => p.e);
+    return {
+        minN: Math.min(...ns), maxN: Math.max(...ns),
+        minE: Math.min(...es), maxE: Math.max(...es)
     };
+  };
 
+  const normalizePoint = (p: Point) => {
+      const mapExtent = getMapExtent();
+      const rangeE = (mapExtent.maxE - mapExtent.minE) || 100;
+      const rangeN = (mapExtent.maxN - mapExtent.minN) || 100;
+      const x = ((p.e - mapExtent.minE) / rangeE) * 700 + 50;
+      const y = 550 - ((p.n - mapExtent.minN) / rangeN) * 500;
+      return { x, y };
+  };
+
+  const denormalize = (x: number, y: number) => {
+      const mapExtent = getMapExtent();
+      const rangeE = (mapExtent.maxE - mapExtent.minE) || 100;
+      const rangeN = (mapExtent.maxN - mapExtent.minN) || 100;
+      
+      const e = ((x - 50) / 700) * rangeE + mapExtent.minE;
+      const n = mapExtent.minN + ((550 - y) / 500) * rangeN;
+      return { e, n };
+  };
+
+  const handleCopyCoords = (p: Point) => {
+    const text = `N: ${p.n.toFixed(3)}, E: ${p.e.toFixed(3)}, Z: ${p.z.toFixed(3)}`;
+    navigator.clipboard.writeText(text);
+  };
+
+  const generateKML = (selectionOnly: boolean = false) => {
+      let pointsToExport = points;
+      if (selectionOnly) {
+          if (selectedIds.size === 0) {
+              alert("Nenhum item selecionado para exportar.");
+              return;
+          }
+          pointsToExport = points.filter(p => selectedIds.has(p.id));
+      }
+
+      let kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>${selectionOnly ? 'Seleção Exportada' : 'Projeto Completo'}</name>
+    <Style id="polyStyle">
+      <LineStyle>
+        <color>ff00ffff</color>
+        <width>2</width>
+      </LineStyle>
+      <PolyStyle>
+        <color>7f00ff00</color>
+      </PolyStyle>
+    </Style>
+    <Placemark>
+      <name>Polígono</name>
+      <styleUrl>#polyStyle</styleUrl>
+      <Polygon>
+        <outerBoundaryIs>
+          <LinearRing>
+            <coordinates>
+`;
+      // Convert points to coordinates
+      pointsToExport.forEach(p => {
+          if (layerConfigs[p.desc]?.visible) {
+            const { lat, long } = fakeGeoConvert(p.n, p.e);
+            kml += `              ${long.toFixed(6)},${lat.toFixed(6)},${p.z}\n`;
+          }
+      });
+      // Close the loop if enough points
+      if (pointsToExport.length > 2) {
+           const p0 = pointsToExport[0];
+           const { lat, long } = fakeGeoConvert(p0.n, p0.e);
+           kml += `              ${long.toFixed(6)},${lat.toFixed(6)},${p0.z}\n`;
+      }
+
+      kml += `            </coordinates>
+          </LinearRing>
+        </outerBoundaryIs>
+      </Polygon>
+      ${pointsToExport.map(p => {
+         const { lat, long } = fakeGeoConvert(p.n, p.e);
+         return `
+         <Placemark>
+            <name>${p.name}</name>
+            <description>${p.desc}</description>
+            <Point>
+                <coordinates>${long.toFixed(6)},${lat.toFixed(6)},${p.z}</coordinates>
+            </Point>
+         </Placemark>
+         `;
+      }).join('')}
+    </Placemark>
+  </Document>
+</kml>`;
+    
+    const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = selectionOnly ? "selecao.kml" : "projeto_completo.kml";
+    link.click();
+  };
+
+  const ContourLines = () => {
+    if (!showContours) return null;
     return (
-        <div className={`h-full flex flex-col ${isDark ? 'bg-cad-bg' : 'bg-slate-50'}`}>
-            <div className={`h-12 border-b flex items-center justify-between px-4 gap-4 ${isDark ? 'bg-cad-panel border-cad-border text-cad-text' : 'bg-white border-slate-200'}`}>
-                <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold uppercase opacity-60">Z Global:</span>
-                    <div className="flex items-center gap-1 bg-black/10 rounded p-1">
-                        <label className="text-[10px] opacity-50 px-1">Offset</label>
-                        <input type="number" value={zBase} onChange={e => setZBase(parseFloat(e.target.value))} className="w-16 bg-transparent text-xs font-mono focus:outline-none"/>
-                    </div>
-                    <div className="flex items-center gap-1 bg-black/10 rounded p-1">
-                        <label className="text-[10px] opacity-50 px-1">Fator</label>
-                        <input type="number" value={zMult} onChange={e => setZMult(parseFloat(e.target.value))} className="w-12 bg-transparent text-xs font-mono focus:outline-none"/>
-                    </div>
-                    <button onClick={applyZTransform} className="bg-cad-accent text-white px-3 py-1 rounded text-xs font-bold hover:brightness-110">Aplicar</button>
-                </div>
-                <button onClick={exportCSV} className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-bold transition ${isDark ? 'bg-white/5 hover:bg-white/10 text-white' : 'bg-white hover:bg-slate-50 border shadow-sm text-slate-700'}`}>
-                    <FileSpreadsheet size={14} className="text-green-500"/> Exportar CSV
-                </button>
-            </div>
+        <g className="opacity-20 pointer-events-none">
+           {points.filter((_, i) => i % 2 === 0).map((p) => {
+              const { x, y } = normalizePoint(p);
+              return (
+                 <g key={`cl-${p.id}`}>
+                    <circle cx={x} cy={y} r={30 / mapZoom} fill="none" stroke="#fbbf24" strokeWidth={1 / mapZoom} />
+                    <circle cx={x} cy={y} r={60 / mapZoom} fill="none" stroke="#fbbf24" strokeWidth={1 / mapZoom} opacity={0.5} />
+                 </g>
+              )
+           })}
+        </g>
+    );
+  };
+
+  // --- Actions ---
+  const handleExportCSV = (selectionOnly: boolean = false) => {
+    const headers = "ID;Nome;Norte(Y);Leste(X);Cota(Z);Descrição;Data\n";
+    let pts = filteredPoints;
+    if (selectionOnly) {
+         if (selectedIds.size === 0) return; // Silent return or could alert
+         pts = points.filter(p => selectedIds.has(p.id));
+    }
+    const rows = pts.map(p => `${p.id};${p.name};${p.n.toFixed(3)};${p.e.toFixed(3)};${p.z.toFixed(3)};${p.desc};${p.date}`).join("\n");
+    const blob = new Blob([headers + rows], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    const dateStr = new Date().toISOString().split('T')[0];
+    const projectName = "Projeto_GeoMaster";
+    link.download = `${projectName}_${dateStr}${selectionOnly ? '_selecao' : ''}.csv`;
+    link.click();
+  };
+
+  const handleApplyZTransform = () => {
+      if (confirm('Isso recalculará a cota (Z) de TODOS os pontos. Deseja continuar?')) {
+          setPoints(prev => prev.map(p => ({
+              ...p,
+              z: (p.z * zTransform.multiplier) + zTransform.base
+          })));
+          setZTransform({ base: 0, multiplier: 1 }); // Reset after apply
+      }
+  };
+
+  const handleViewOnMap = (p: Point) => {
+    setActiveTab('mapa');
+    setIs3DMode(false);
+    setMapZoom(2);
+    setMapPan({ x: -200, y: -100 });
+    setSelectedIds(new Set([p.id]));
+  };
+
+  const handleSaveView = () => {
+    if (!viewNameInput) return;
+    setSavedViews([...savedViews, { id: Date.now().toString(), name: viewNameInput, zoom: mapZoom, pan: { ...mapPan } }]);
+    setViewNameInput('');
+    setShowSaveViewDialog(false);
+  };
+
+  const handleRestoreView = (viewId: string) => {
+    const view = savedViews.find(v => v.id === viewId);
+    if (view) { setMapZoom(view.zoom); setMapPan(view.pan); }
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const scale = e.deltaY > 0 ? 0.9 : 1.1;
+    setMapZoom(prev => Math.min(Math.max(prev * scale, 0.5), 10));
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const worldMouseX = ((e.clientX - rect.left) - mapPan.x) / mapZoom;
+    const worldMouseY = ((e.clientY - rect.top) - mapPan.y) / mapZoom;
+
+    // Moving Point Logic
+    if (movingPointId) {
+        const newCoords = denormalize(worldMouseX, worldMouseY);
+        setPoints(prev => prev.map(p => 
+            p.id === movingPointId 
+            ? { ...p, n: newCoords.n, e: newCoords.e } 
+            : p
+        ));
+        return;
+    }
+
+    if (isDragging) {
+      setMapPan({ x: mapPan.x + (e.clientX - dragStart.x), y: mapPan.y + (e.clientY - dragStart.y) });
+      setDragStart({ x: e.clientX, y: e.clientY });
+    }
+    
+    // ... Splitting & Snap Logic ...
+    let foundVertex = false;
+
+    // 1. Splitting Logic (Line Detection)
+    if (isSplitting) {
+        let bestSplit: {idx: number, point: Point, dist: number} | null = null;
+        for(let i=0; i<points.length-1; i++) {
+            const p1 = normalizePoint(points[i]);
+            const p2 = normalizePoint(points[i+1]);
+            const proj = projectPointOnSegment(worldMouseX, worldMouseY, p1.x, p1.y, p2.x, p2.y);
+            const dist = Math.sqrt((proj.x - worldMouseX)**2 + (proj.y - worldMouseY)**2);
             
-            <div className={`flex-1 overflow-auto p-0`}>
-                <table className={`w-full text-sm text-left border-collapse table-fixed ${isDark ? 'text-gray-300' : 'text-slate-700'}`}>
-                    <thead className={`text-xs uppercase sticky top-0 z-10 ${isDark ? 'bg-cad-panel text-gray-400' : 'bg-slate-50 text-slate-500'}`}>
-                        <tr>
-                            <ResizableTh width={40} className="p-3 text-center"><input type="checkbox" checked={selectedIds.size === points.length && points.length > 0} onChange={(e) => setSelectedIds(e.target.checked ? new Set(points.map((p:any) => p.id)) : new Set())}/></ResizableTh>
-                            <ResizableTh width={colWidths.id} onResize={(e: any) => startResize(e, 'id')} className="p-3 font-semibold">ID</ResizableTh>
-                            <ResizableTh width={colWidths.x} onResize={(e: any) => startResize(e, 'x')} className="p-3 font-semibold">Este (X)</ResizableTh>
-                            <ResizableTh width={colWidths.y} onResize={(e: any) => startResize(e, 'y')} className="p-3 font-semibold">Norte (Y)</ResizableTh>
-                            <ResizableTh width={colWidths.z} onResize={(e: any) => startResize(e, 'z')} className="p-3 font-semibold">Cota (Z)</ResizableTh>
-                            <ResizableTh width={colWidths.desc} onResize={(e: any) => startResize(e, 'desc')} className="p-3 font-semibold">Descrição</ResizableTh>
-                        </tr>
-                    </thead>
-                    <tbody className={`divide-y ${isDark ? 'divide-white/10' : 'divide-slate-100'} ${isDark ? 'bg-cad-bg' : 'bg-white'}`}>
-                        {points.map((p: SurveyPoint, i: number) => (
-                            <tr key={i} className={`${isDark ? 'hover:bg-white/5' : 'hover:bg-slate-50'} transition ${selectedIds.has(p.id) ? (isDark ? 'bg-cad-accent/10' : 'bg-brand-50/50') : ''}`}>
-                                <td className="p-3 text-center"><input type="checkbox" checked={selectedIds.has(p.id)} onChange={() => toggleSelect(p.id)}/></td>
-                                <td className="p-3"><input className="w-full bg-transparent border-none focus:ring-0 p-0 font-medium" value={p.id} onChange={(e) => handlePointChange(i, 'id', e.target.value)} /></td>
-                                <td className="p-3"><input type="number" className="w-full bg-transparent border-none focus:ring-0 p-0 font-mono opacity-80" value={p.x} onChange={(e) => handlePointChange(i, 'x', parseFloat(e.target.value))} /></td>
-                                <td className="p-3"><input type="number" className="w-full bg-transparent border-none focus:ring-0 p-0 font-mono opacity-80" value={p.y} onChange={(e) => handlePointChange(i, 'y', parseFloat(e.target.value))} /></td>
-                                <td className="p-3"><input type="number" className="w-full bg-transparent border-none focus:ring-0 p-0 font-mono opacity-80" value={p.z} onChange={(e) => handlePointChange(i, 'z', parseFloat(e.target.value))} /></td>
-                                <td className="p-3"><input className="w-full bg-transparent border-none focus:ring-0 p-0 opacity-70" value={p.desc} onChange={(e) => handlePointChange(i, 'desc', e.target.value)} /></td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    );
-};
-
-const View3D = ({ points, theme }: { points: SurveyPoint[], theme: 'light' | 'dark' }) => {
-    const isDark = theme === 'dark';
-    const [visibleCategories, setVisibleCategories] = useState<Set<string>>(new Set());
-    const [categoryColors, setCategoryColors] = useState<Record<string, string>>({});
-    
-    // Extract unique descriptions for filtering
-    const categories = useMemo(() => Array.from(new Set(points.map(p => p.desc || 'Sem Descrição'))), [points]);
-    
-    // Initialize colors
-    useEffect(() => {
-        const newColors = { ...categoryColors };
-        let changed = false;
-        categories.forEach((cat, idx) => {
-             if (!newColors[cat]) {
-                 // Generate a deterministic pastel color
-                 const hue = (idx * 137.508) % 360; 
-                 newColors[cat] = `hsl(${hue}, 70%, 60%)`;
-                 changed = true;
-             }
-        });
-        if (changed) setCategoryColors(newColors);
-        if (visibleCategories.size === 0 && categories.length > 0) {
-            setVisibleCategories(new Set(categories));
-        }
-    }, [categories]);
-
-    const toggleCategory = (cat: string) => {
-        const newSet = new Set(visibleCategories);
-        if (newSet.has(cat)) newSet.delete(cat); else newSet.add(cat);
-        setVisibleCategories(newSet);
-    }
-    
-    const changeColor = (cat: string, color: string) => {
-        setCategoryColors(prev => ({...prev, [cat]: color}));
-    }
-
-    const filteredPoints = useMemo(() => points.filter(p => visibleCategories.has(p.desc || 'Sem Descrição')), [points, visibleCategories]);
-
-    const centroid = useMemo(() => {
-        if (filteredPoints.length === 0) return { x: 0, y: 0, z: 0 };
-        const xs = filteredPoints.map(p => p.x); const ys = filteredPoints.map(p => p.y); const zs = filteredPoints.map(p => p.z);
-        return { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2, z: (Math.min(...zs) + Math.max(...zs)) / 2 };
-    }, [filteredPoints]);
-
-    const normalizedPoints = useMemo(() => filteredPoints.map(p => ({ ...p, x: p.x - centroid.x, y: p.y - centroid.y, z: (p.z - centroid.z) * 2 })), [filteredPoints, centroid]);
-
-    return (
-        <div className={`w-full h-full relative ${isDark ? 'bg-black' : 'bg-slate-100'}`}>
-             <div className="absolute top-4 left-4 z-10 bg-black/50 p-3 rounded backdrop-blur-sm border border-white/10 w-64 max-h-[80vh] overflow-y-auto">
-                 <div className="text-white text-xs font-bold uppercase mb-2 flex items-center gap-2"><Filter size={12}/> Camadas & Cores</div>
-                 <div className="space-y-1">
-                     {categories.map(cat => (
-                         <div key={cat} className="flex items-center justify-between group">
-                             <label className="flex items-center space-x-2 text-white/80 text-xs cursor-pointer hover:text-white flex-1">
-                                 <input type="checkbox" checked={visibleCategories.has(cat)} onChange={() => toggleCategory(cat)} className="rounded bg-white/20 border-none"/>
-                                 <span className="truncate">{cat}</span>
-                             </label>
-                             <div className="relative w-4 h-4 overflow-hidden rounded-full border border-white/30 hover:border-white">
-                                 <input type="color" value={categoryColors[cat] || '#ffffff'} onChange={(e) => changeColor(cat, e.target.value)} className="absolute -top-1 -left-1 w-6 h-6 p-0 border-none cursor-pointer" />
-                             </div>
-                         </div>
-                     ))}
-                 </div>
-             </div>
-
-             <Canvas camera={{ position: [50, 50, 50], fov: 45 }}>
-                <ambientLight intensity={0.5} />
-                <pointLight position={[10, 10, 10]} intensity={1} />
-                <OrbitControls makeDefault />
-                <GizmoHelper alignment="bottom-right" margin={[80, 80]}><GizmoViewport axisColors={['#9d4b4b', '#2f7f4f', '#3b5b9d']} labelColor="white" /></GizmoHelper>
-                <gridHelper args={[200, 20]} position={[0, -10, 0]} />
-                <group>
-                    {normalizedPoints.map((p, i) => (
-                        <group key={i} position={[p.x, p.z, -p.y]}>
-                             <mesh>
-                                 <sphereGeometry args={[0.5, 16, 16]} />
-                                 <meshStandardMaterial color={categoryColors[p.desc || 'Sem Descrição'] || '#fbbf24'} />
-                             </mesh>
-                        </group>
-                    ))}
-                    {normalizedPoints.length > 1 && <Line points={normalizedPoints.map(p => [p.x, p.z, -p.y] as [number, number, number])} color="#3b82f6" lineWidth={2} />}
-                </group>
-             </Canvas>
-        </div>
-    );
-};
-
-const ElevationProfile = ({ points, theme }: { points: SurveyPoint[], theme: 'light' | 'dark' }) => {
-    const isDark = theme === 'dark';
-    const chartRef = useRef<HTMLDivElement>(null);
-    const data = useMemo(() => {
-        let dist = 0;
-        return points.map((p, i) => {
-            if (i > 0) { const prev = points[i-1]; dist += Math.sqrt((p.x - prev.x)**2 + (p.y - prev.y)**2); }
-            return { name: p.id, dist, z: p.z };
-        });
-    }, [points]);
-
-    const downloadChart = () => {
-        if (chartRef.current) {
-            const svg = chartRef.current.querySelector('svg');
-            if (svg) {
-                const svgData = new XMLSerializer().serializeToString(svg);
-                const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
-                const url = URL.createObjectURL(blob);
-                const link = document.createElement('a');
-                link.href = url;
-                link.download = 'perfil_elevacao.svg';
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
+            if(layerConfigs[points[i].desc]?.visible && dist < 20/mapZoom) {
+                if (!bestSplit || dist < bestSplit.dist) {
+                    const worldCoords = denormalize(proj.x, proj.y);
+                    bestSplit = {
+                        idx: i,
+                        dist,
+                        point: {
+                            id: `S-${Date.now()}`,
+                            name: `S-${points.length+1}`,
+                            n: worldCoords.n,
+                            e: worldCoords.e,
+                            z: (points[i].z + points[i+1].z)/2,
+                            desc: points[i].desc,
+                            date: new Date().toISOString().split('T')[0]
+                        }
+                    }
+                }
             }
         }
+        setSplitCandidate(bestSplit ? { idx: bestSplit.idx, point: bestSplit.point } : null);
+        return;
     }
 
-    return (
-        <div className={`h-full w-full p-6 flex flex-col ${isDark ? 'bg-cad-bg text-white' : 'bg-slate-50 text-slate-800'}`}>
-            <div className={`p-6 rounded-xl border shadow-sm flex-1 flex flex-col ${isDark ? 'bg-cad-panel border-cad-border' : 'bg-white border-slate-200'}`}>
-                 <div className="flex justify-between items-center mb-6">
-                    <h3 className="font-bold flex items-center gap-2"><BarChartBig className="text-cad-accent"/> Perfil Altimétrico</h3>
-                    <button onClick={downloadChart} className="flex items-center gap-2 px-3 py-1.5 text-xs font-bold bg-cad-accent text-white rounded hover:brightness-110"><ImageIcon size={14}/> Exportar SVG</button>
-                 </div>
-                 <div className="flex-1 w-full min-h-0" ref={chartRef}>
-                    <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-                            <defs>
-                                <linearGradient id="colorZ" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.3}/>
-                                    <stop offset="95%" stopColor="#06b6d4" stopOpacity={0}/>
-                                </linearGradient>
-                            </defs>
-                            <XAxis dataKey="dist" tickFormatter={(v) => `${v.toFixed(0)}m`} stroke={isDark ? "#52525b" : "#94a3b8"} fontSize={12} tickLine={false} axisLine={false} />
-                            <YAxis domain={['auto', 'auto']} stroke={isDark ? "#52525b" : "#94a3b8"} fontSize={12} tickLine={false} axisLine={false} tickFormatter={(v) => `${v}m`}/>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? "#27272a" : "#e2e8f0"}/>
-                            <RechartsTooltip contentStyle={{backgroundColor: isDark ? '#18181b' : '#fff', borderColor: isDark ? '#3f3f46' : '#e2e8f0', color: isDark ? '#fff' : '#000'}} itemStyle={{color: isDark ? '#fff' : '#000'}} formatter={(value: number) => [`${value.toFixed(2)} m`, 'Elevação']} labelFormatter={(label) => `Distância: ${parseFloat(label).toFixed(2)} m`}/>
-                            <Area type="monotone" dataKey="z" stroke="#06b6d4" strokeWidth={3} fillOpacity={1} fill="url(#colorZ)" activeDot={{r: 6, strokeWidth: 0}} />
-                        </AreaChart>
-                    </ResponsiveContainer>
-                 </div>
+    // 2. Snap Logic
+    if (snapSettings.enabled) {
+        let closest: Point | null = null;
+        let minDist = snapSettings.distance / mapZoom;
+
+        // Vertices Snap
+        if (snapSettings.vertices) {
+            points.forEach(p => {
+                if(!layerConfigs[p.desc]?.visible) return;
+                const { x, y } = normalizePoint(p);
+                const dist = Math.sqrt((x - worldMouseX) ** 2 + (y - worldMouseY) ** 2);
+                if (dist < minDist) { minDist = dist; closest = p; }
+            });
+        }
+        if (closest) {
+            setSnapPoint(closest);
+            setSnapMidpoint(null);
+            setSnapGrid(null);
+            foundVertex = true;
+        } else {
+            setSnapPoint(null);
+        }
+
+        // Midpoint Snap
+        if (!foundVertex && snapSettings.midpoints) {
+            let closestMid: { point: {x:number, y:number}, label: string, dist: number} | null = null;
+            for (let i = 0; i < points.length - 1; i++) {
+                if (!layerConfigs[points[i].desc]?.visible) continue;
+                const p1 = normalizePoint(points[i]);
+                const p2 = normalizePoint(points[i+1]);
+                const midX = (p1.x + p2.x) / 2;
+                const midY = (p1.y + p2.y) / 2;
+                const dist = Math.sqrt((midX - worldMouseX)**2 + (midY - worldMouseY)**2);
+                
+                if (dist < minDist) {
+                    minDist = dist;
+                    closestMid = { point: {x: midX, y: midY}, label: `Mid(${points[i].name}-${points[i+1].name})`, dist };
+                }
+            }
+            setSnapMidpoint(closestMid);
+            if (closestMid) setSnapGrid(null);
+        } else {
+            setSnapMidpoint(null);
+        }
+
+        // Grid Snap (Coordinate Based - 5m Grid)
+        if (!foundVertex && !snapMidpoint && snapSettings.grid) {
+            // Get Mouse World Position
+            const worldPos = denormalize(worldMouseX, worldMouseY);
+            const gridInterval = 5; // Snap to nearest 5 meters
+            const snappedN = Math.round(worldPos.n / gridInterval) * gridInterval;
+            const snappedE = Math.round(worldPos.e / gridInterval) * gridInterval;
+            
+            // Convert snapped world pos back to screen for distance check
+            const screenPos = normalizePoint({ n: snappedN, e: snappedE, id: 'temp', name: '', z: 0, desc: '', date: '' });
+            
+            const dist = Math.sqrt((worldMouseX - screenPos.x)**2 + (worldMouseY - screenPos.y)**2);
+
+            if (dist < minDist) {
+                    setSnapGrid({ point: {x: screenPos.x, y: screenPos.y} });
+            } else {
+                    setSnapGrid(null);
+            }
+        } else {
+            setSnapGrid(null);
+        }
+    } else {
+        setSnapPoint(null);
+        setSnapMidpoint(null);
+        setSnapGrid(null);
+    }
+  };
+
+  const handleMapMouseDown = (e: React.MouseEvent, p?: Point) => {
+      if (p) {
+          e.stopPropagation();
+          // Selection Logic with Shift
+          if (e.shiftKey) {
+              const newSet = new Set(selectedIds);
+              if (newSet.has(p.id)) newSet.delete(p.id);
+              else newSet.add(p.id);
+              setSelectedIds(newSet);
+          } else {
+              // If not shift, allow selection if not already selected, but prepare for move
+              if (!selectedIds.has(p.id)) {
+                  setSelectedIds(new Set([p.id]));
+              }
+              setMovingPointId(p.id);
+          }
+      } else {
+          // Empty space click
+          setIsDragging(true); 
+          setDragStart({ x: e.clientX, y: e.clientY });
+          if (!isDragging) {
+              setSelectedIds(new Set());
+          }
+      }
+  };
+
+  const handleMapMouseUp = () => {
+      setIsDragging(false);
+      setMovingPointId(null);
+  };
+
+  const confirmSplit = () => {
+       // Handled in click
+  };
+  
+  const handleMapClick = (e: React.MouseEvent) => {
+       if (isSplitting && splitCandidate) {
+          if (confirm('Deseja dividir o segmento e criar um novo vértice aqui?')) {
+              const newPoints = [...points];
+              newPoints.splice(splitCandidate.idx + 1, 0, splitCandidate.point);
+              setPoints(newPoints);
+              setIsSplitting(false);
+              setSplitCandidate(null);
+          }
+      }
+  };
+
+  // --- Renderers ---
+  const renderReports = () => (
+      <div className="flex flex-col h-full animate-in fade-in duration-300">
+         <div className="flex items-center justify-between mb-6">
+            <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+               <FileText className="text-cad-accent" /> Relatórios & Memoriais
+            </h2>
+         </div>
+         <div className="grid grid-cols-2 gap-8 h-full">
+            <div className="flex flex-col bg-zinc-900 border border-white/10 rounded-xl p-6">
+                <div className="flex items-center gap-3 mb-4 text-zinc-300 font-bold border-b border-white/10 pb-4">
+                    <FileDown size={20} className="text-cad-accent" /> Central de Exportação
+                </div>
+                <div className="space-y-4">
+                     <button onClick={() => handleExportCSV(false)} className="w-full flex items-center justify-between p-4 bg-zinc-800 hover:bg-zinc-700 rounded-lg border border-white/5 transition-colors group">
+                         <span className="text-sm font-bold text-white">Exportar Todos os Pontos (CSV)</span>
+                         <Download size={16} className="text-zinc-500 group-hover:text-white"/>
+                     </button>
+                     <button onClick={() => handleExportCSV(true)} disabled={selectedIds.size === 0} className="w-full flex items-center justify-between p-4 bg-zinc-800 hover:bg-zinc-700 rounded-lg border border-white/5 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed">
+                         <span className="text-sm font-bold text-white">Exportar Seleção (CSV)</span>
+                         <div className="flex items-center gap-2">
+                             <span className="text-xs text-zinc-500">{selectedIds.size} itens</span>
+                             <Download size={16} className="text-zinc-500 group-hover:text-white"/>
+                         </div>
+                     </button>
+                     <div className="h-px bg-white/5 my-2"></div>
+                     <button className="w-full flex items-center justify-between p-4 bg-zinc-800 hover:bg-zinc-700 rounded-lg border border-white/5 transition-colors group">
+                         <span className="text-sm font-bold text-white">Exportar Projeto (DXF)</span>
+                         <Box size={16} className="text-zinc-500 group-hover:text-cad-accent"/>
+                     </button>
+                     <button className="w-full flex items-center justify-between p-4 bg-zinc-800 hover:bg-zinc-700 rounded-lg border border-white/5 transition-colors group">
+                         <span className="text-sm font-bold text-white">Exportar KML/KMZ</span>
+                         <Globe size={16} className="text-zinc-500 group-hover:text-emerald-500"/>
+                     </button>
+                </div>
             </div>
+            
+            <div className="flex flex-col bg-zinc-900 border border-white/10 rounded-xl p-6 overflow-hidden">
+                 <div className="flex items-center justify-between mb-4 text-zinc-300 font-bold border-b border-white/10 pb-4">
+                    <div className="flex items-center gap-3"><FileText size={20} className="text-cad-accent" /> Memorial Descritivo</div>
+                    <button className="text-xs bg-cad-accent text-white px-3 py-1 rounded hover:bg-cad-accent/80">Copiar Texto</button>
+                </div>
+                <div className="flex-1 bg-zinc-950 rounded-lg p-4 font-mono text-xs text-zinc-400 overflow-y-auto border border-white/5">
+                    {`MEMORIAL DESCRITIVO ANALÍTICO\n\nPROJETO: Levantamento Topográfico\nDATA: ${new Date().toLocaleDateString()}\n\nDESCRIÇÃO PERIMÉTRICA:\n\nInicia-se a descrição deste perímetro no vértice ${points[0]?.name}, de coordenadas N=${points[0]?.n.toFixed(3)}m e E=${points[0]?.e.toFixed(3)}m.\nDeste, segue confrontando com área remanescente, com os seguintes azimutes e distâncias:\n\n${points.slice(0, points.length-1).map((p, i) => {
+                        const next = points[i+1];
+                        const dist = Math.sqrt(Math.pow(next.n - p.n, 2) + Math.pow(next.e - p.e, 2)).toFixed(2);
+                        return `Do vértice ${p.name} ao vértice ${next.name}, Azimute Calculado e distância de ${dist}m;`
+                    }).join('\n')}\n\nFechando assim o polígono acima descrito com uma área superficial de calculada.`}
+                </div>
+            </div>
+         </div>
+      </div>
+  );
+
+  const renderDataTable = () => (
+    <div className="flex flex-col h-full animate-in fade-in duration-300">
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+          <Table2 className="text-cad-accent" /> Banco de Dados
+        </h2>
+        <div className="flex gap-3">
+          <button onClick={() => setShowImportModal(true)} className="flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded-lg text-sm font-medium transition-colors border border-white/5">
+            <Upload size={16} /> Importar CSV
+          </button>
+          <button onClick={() => setShowNewPointModal(true)} className="flex items-center gap-2 px-4 py-2 bg-cad-accent text-white rounded-lg text-sm font-bold shadow-lg hover:brightness-110 transition-all">
+            <Plus size={16} /> Novo Ponto
+          </button>
         </div>
+      </div>
+
+      {/* Z Transformation Toolbar */}
+      <div className="bg-zinc-900/80 border border-white/10 rounded-xl p-3 mb-4 flex items-center gap-4">
+          <div className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-2"><Settings size={14}/> Ajuste Global de Cota (Z)</div>
+          <div className="h-4 w-px bg-white/10"></div>
+          <div className="flex items-center gap-2">
+              <label className="text-xs text-zinc-400">Elevação Base:</label>
+              <input type="number" value={zTransform.base} onChange={e => setZTransform({...zTransform, base: Number(e.target.value)})} className="bg-black/30 border border-white/10 rounded px-2 py-1 text-xs text-white w-20 text-right" />
+          </div>
+          <div className="flex items-center gap-2">
+              <label className="text-xs text-zinc-400">Multiplicador:</label>
+              <input type="number" value={zTransform.multiplier} onChange={e => setZTransform({...zTransform, multiplier: Number(e.target.value)})} className="bg-black/30 border border-white/10 rounded px-2 py-1 text-xs text-white w-20 text-right" />
+          </div>
+          <button onClick={handleApplyZTransform} className="ml-auto px-3 py-1 bg-zinc-800 hover:bg-cad-accent hover:text-white text-xs rounded border border-white/10 transition-colors flex items-center gap-1">
+             <RefreshCw size={12} /> Aplicar Transformação
+          </button>
+      </div>
+
+      <div className="bg-zinc-900/50 border border-white/10 rounded-xl overflow-hidden flex flex-col flex-1 shadow-cad">
+        <div className="p-4 border-b border-white/10 flex items-center gap-4 bg-zinc-900/80">
+          <div className="relative flex-1 max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={16} />
+            <input type="text" placeholder="Buscar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-black/20 border border-white/10 rounded-lg pl-10 pr-4 py-2 text-sm text-white focus:outline-none focus:border-cad-accent transition-colors"/>
+          </div>
+          <div className="text-xs text-zinc-500 font-mono">{filteredPoints.length} registros</div>
+        </div>
+        <div className="flex-1 overflow-auto">
+          <table className="w-full text-left border-collapse table-fixed">
+            <thead className="bg-zinc-900/90 text-xs font-bold text-zinc-500 uppercase sticky top-0 backdrop-blur-md z-10">
+              <tr>
+                <ResizableHeader label="#" width={colWidths.id} onResize={w => setColWidths({...colWidths, id: w})} />
+                <ResizableHeader label="Nome" width={colWidths.name} onResize={w => setColWidths({...colWidths, name: w})} />
+                <ResizableHeader label="Norte (Y)" width={colWidths.n} align="right" onResize={w => setColWidths({...colWidths, n: w})} />
+                <ResizableHeader label="Leste (X)" width={colWidths.e} align="right" onResize={w => setColWidths({...colWidths, e: w})} />
+                <ResizableHeader label="Cota (Z)" width={colWidths.z} align="right" onResize={w => setColWidths({...colWidths, z: w})} />
+                <ResizableHeader label="Descrição" width={colWidths.desc} onResize={w => setColWidths({...colWidths, desc: w})} />
+                <th className="p-4 border-b border-white/10 w-32 text-center">Ações</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5 text-sm text-zinc-300 font-mono">
+              {filteredPoints.map((point, idx) => (
+                <tr key={point.id} className="hover:bg-white/5 transition-colors group">
+                  <td className="p-4 truncate">{idx + 1}</td>
+                  <td className="p-4 font-bold text-white truncate">{point.name}</td>
+                  <td className="p-4 text-right text-cad-accent truncate">{point.n.toFixed(3)}</td>
+                  <td className="p-4 text-right truncate">{point.e.toFixed(3)}</td>
+                  <td className="p-4 text-right truncate group-hover:text-white transition-colors">
+                      {/* Visual indication of potential transform */}
+                      {point.z.toFixed(3)}
+                  </td>
+                  <td className="p-4 text-zinc-400 truncate">{point.desc}</td>
+                  <td className="p-4 flex justify-center gap-2">
+                    <button onClick={() => handleCopyCoords(point)} className="p-2 bg-zinc-800 text-zinc-400 hover:text-white rounded transition-colors"><Copy size={14} /></button>
+                    <button onClick={() => handleViewOnMap(point)} className="p-2 bg-zinc-800 text-zinc-400 hover:text-cad-accent rounded transition-colors"><LocateFixed size={14} /></button>
+                    <button className="p-2 text-zinc-600 hover:text-red-400 rounded transition-colors"><Trash2 size={14} /></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderMap = () => {
+    return (
+      <div className="flex flex-col h-full animate-in fade-in duration-300">
+        <div className="flex items-center justify-between mb-4 gap-4">
+            <h2 className="text-2xl font-bold text-white flex items-center gap-2 whitespace-nowrap">
+               <MapIcon className="text-cad-accent" /> {is3DMode ? 'View3D Espacial' : 'SurveyMap 2D'}
+            </h2>
+             
+             {/* Map Toolbar */}
+             <div className="flex gap-2 items-center flex-1 overflow-x-auto p-1 scrollbar-hide">
+                {!is3DMode && (
+                  <>
+                  {/* Date Filter */}
+                  <div className="flex items-center gap-2 bg-zinc-900 border border-white/10 rounded-lg p-1 px-2 mx-2">
+                      <Calendar size={14} className="text-zinc-500"/>
+                      <input type="date" value={dateRange.start} onChange={e => setDateRange({...dateRange, start: e.target.value})} className="bg-transparent text-xs text-white border-none outline-none w-24"/>
+                      <span className="text-zinc-600">-</span>
+                      <input type="date" value={dateRange.end} onChange={e => setDateRange({...dateRange, end: e.target.value})} className="bg-transparent text-xs text-white border-none outline-none w-24"/>
+                  </div>
+                  
+                  <div className="h-6 w-px bg-white/10 mx-2"></div>
+                  
+                  {/* Export Selection CSV Button */}
+                  <AutoCADTooltip title="Exportar CSV (Seleção)" desc="Salvar pontos selecionados em CSV">
+                      <button 
+                        onClick={() => handleExportCSV(true)} 
+                        disabled={selectedIds.size === 0}
+                        className={`p-2 rounded-lg border transition-all ${selectedIds.size > 0 ? 'bg-zinc-800 hover:bg-zinc-700 text-green-500 border-green-500/30' : 'bg-zinc-900 text-zinc-600 border-white/5 cursor-not-allowed'}`}
+                      >
+                         <FileDown size={18} />
+                      </button>
+                  </AutoCADTooltip>
+
+                  <div className="h-6 w-px bg-white/10 mx-2"></div>
+
+                  <AutoCADTooltip title="Exportar KML (Tudo)" desc="Exportar todos os pontos visíveis">
+                      <button onClick={() => generateKML(false)} className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-white/5 text-emerald-500">
+                         <Globe size={18} />
+                      </button>
+                  </AutoCADTooltip>
+                  
+                  <AutoCADTooltip title="Exportar KML (Seleção)" desc="Exportar apenas itens selecionados">
+                      <button onClick={() => generateKML(true)} className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-white/5 text-cad-accent">
+                         <Move size={18} />
+                      </button>
+                  </AutoCADTooltip>
+
+                  {/* Split Tool */}
+                  <AutoCADTooltip title="Dividir Segmento" desc="Seccionar linhas e polígonos">
+                      <button 
+                        onClick={() => setIsSplitting(!isSplitting)}
+                        className={`p-2 rounded-lg border transition-all ${isSplitting ? 'bg-cad-accent text-white border-cad-accent shadow-glow animate-pulse' : 'bg-zinc-800 text-zinc-400 border-white/5 hover:bg-zinc-700'}`}
+                      >
+                         <Scissors size={18} />
+                      </button>
+                  </AutoCADTooltip>
+
+                  {/* Snap Settings */}
+                  <div className="relative group">
+                    <AutoCADTooltip title="Precisão e Snap" desc="Configurar atração magnética">
+                        <button 
+                            onClick={() => setSnapSettings(prev => ({...prev, enabled: !prev.enabled}))}
+                            className={`p-2 rounded-lg border transition-all ${snapSettings.enabled ? 'bg-zinc-700 text-cad-accent border-cad-accent/50' : 'bg-zinc-800 text-zinc-500 border-white/5'}`}
+                        >
+                            <Magnet size={18} />
+                        </button>
+                    </AutoCADTooltip>
+                    <div className="absolute right-0 top-full mt-2 w-48 bg-zinc-900 border border-white/10 rounded-lg shadow-xl p-3 z-50 hidden group-hover:block">
+                        <div className="text-[10px] font-bold text-zinc-500 uppercase mb-2">Opções de Snap</div>
+                        <div className="space-y-2">
+                            <label className="flex items-center gap-2 cursor-pointer hover:bg-white/5 p-1 rounded">
+                                <input type="checkbox" checked={snapSettings.enabled} onChange={e => setSnapSettings({...snapSettings, enabled: e.target.checked})} className="rounded bg-zinc-800 border-white/20"/>
+                                <span className="text-xs text-white">Ativar Snap</span>
+                            </label>
+                            <div className="h-px bg-white/10"></div>
+                            <label className="flex items-center gap-2 cursor-pointer hover:bg-white/5 p-1 rounded">
+                                <Circle size={12} className={snapSettings.vertices ? 'text-cad-accent' : 'text-zinc-600'} />
+                                <input type="checkbox" checked={snapSettings.vertices} onChange={e => setSnapSettings({...snapSettings, vertices: e.target.checked})} className="rounded bg-zinc-800 border-white/20"/>
+                                <span className="text-xs text-zinc-300">Vértices/Polígonos</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer hover:bg-white/5 p-1 rounded">
+                                <Triangle size={12} className={snapSettings.midpoints ? 'text-cad-accent' : 'text-zinc-600'} />
+                                <input type="checkbox" checked={snapSettings.midpoints} onChange={e => setSnapSettings({...snapSettings, midpoints: e.target.checked})} className="rounded bg-zinc-800 border-white/20"/>
+                                <span className="text-xs text-zinc-300">Pontos Médios</span>
+                            </label>
+                             <label className="flex items-center gap-2 cursor-pointer hover:bg-white/5 p-1 rounded">
+                                <Grid size={12} className={snapSettings.grid ? 'text-cad-accent' : 'text-zinc-600'} />
+                                <input type="checkbox" checked={snapSettings.grid} onChange={e => setSnapSettings({...snapSettings, grid: e.target.checked})} className="rounded bg-zinc-800 border-white/20"/>
+                                <span className="text-xs text-zinc-300">Grade</span>
+                            </label>
+                             <div className="pt-2">
+                                <div className="text-[10px] text-zinc-500 mb-1">Distância: {snapSettings.distance}px</div>
+                                <input type="range" min="5" max="50" value={snapSettings.distance} onChange={e => setSnapSettings({...snapSettings, distance: parseInt(e.target.value)})} className="w-full h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer" />
+                             </div>
+                        </div>
+                    </div>
+                  </div>
+
+                  <div className="h-6 w-px bg-white/10 mx-2"></div>
+
+                  <AutoCADTooltip title="Curvas de Nível" desc="Alternar visualização de isolinhas">
+                    <button 
+                        onClick={() => setShowContours(!showContours)}
+                        className={`flex items-center gap-2 px-2 py-1 text-xs rounded border transition-colors ${showContours ? 'bg-amber-500/20 text-amber-500 border-amber-500/50' : 'bg-zinc-900 border-white/10 text-zinc-400'}`}
+                    >
+                        <Mountain size={14} /> Curvas
+                    </button>
+                  </AutoCADTooltip>
+
+                  <div className="flex items-center gap-2 mr-4 bg-zinc-900 p-1 rounded-lg border border-white/10">
+                    {showSaveViewDialog ? (
+                      <div className="flex items-center animate-in slide-in-from-right-5">
+                        <input autoFocus className="w-32 bg-zinc-800 border-none text-xs px-2 py-1 rounded text-white outline-none" placeholder="Nome..." value={viewNameInput} onChange={e => setViewNameInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSaveView()} />
+                        <button onClick={handleSaveView} className="p-1 hover:text-green-400"><Check size={14}/></button>
+                        <button onClick={() => setShowSaveViewDialog(false)} className="p-1 hover:text-red-400"><X size={14}/></button>
+                      </div>
+                    ) : (
+                      <>
+                        <AutoCADTooltip title="Salvar Vista" desc="Gravar posição e zoom atual">
+                            <button onClick={() => setShowSaveViewDialog(true)} className="flex items-center gap-1 px-2 py-1 text-xs hover:bg-zinc-800 rounded transition-colors text-zinc-400 hover:text-white"><Save size={14} /> Salvar</button>
+                        </AutoCADTooltip>
+                         {savedViews.length > 0 && (
+                            <select onChange={(e) => handleRestoreView(e.target.value)} className="bg-zinc-800 text-xs py-1 px-2 rounded border-none outline-none text-zinc-300 w-24" defaultValue="">
+                                <option value="" disabled>Vistas...</option>
+                                {savedViews.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                            </select>
+                         )}
+                      </>
+                    )}
+                  </div>
+                  </>
+                )}
+                
+                <div className="relative group z-50">
+                    <AutoCADTooltip title="Gerenciador de Camadas" desc="Alterar visibilidade e cores por descrição">
+                        <button className="p-2 bg-zinc-800 text-white rounded-lg hover:bg-zinc-700 border border-white/5"><Layers size={18}/></button>
+                    </AutoCADTooltip>
+                    <div className="absolute right-0 top-full mt-2 w-64 bg-zinc-900 border border-white/10 rounded-lg shadow-xl p-3 z-50 hidden group-hover:block">
+                        <div className="text-xs font-bold text-zinc-500 mb-2 px-1 uppercase flex justify-between items-center">
+                            <span>Camadas & Cores</span>
+                            <span className="text-[10px] text-zinc-600">Salvo automaticamente</span>
+                        </div>
+                        {(Object.entries(layerConfigs) as [string, LayerConfig][]).map(([desc, config]) => (
+                            <div key={desc} className="flex items-center justify-between px-2 py-1.5 hover:bg-white/5 rounded cursor-pointer transition-colors">
+                                <span className="text-xs text-white font-medium truncate max-w-[100px]">{desc}</span>
+                                <div className="flex items-center gap-3">
+                                    <div className="relative w-5 h-5 rounded-full overflow-hidden border border-white/20">
+                                        <input type="color" value={config.color} onChange={(e) => setLayerConfigs(prev => ({...prev, [desc]: {...prev[desc], color: e.target.value}}))} className="absolute -top-2 -left-2 w-10 h-10 cursor-pointer p-0 border-0" />
+                                    </div>
+                                    <button onClick={() => setLayerConfigs(prev => ({...prev, [desc]: { ...prev[desc], visible: !config.visible }}))} className={`text-xs transition-colors ${config.visible ? 'text-cad-accent' : 'text-zinc-600'}`}>{config.visible ? <Eye size={14} /> : <EyeOff size={14} />}</button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+                <div className="h-6 w-px bg-white/10 mx-1"></div>
+                <AutoCADTooltip title="Alternar Modo 2D/3D" desc="Mudar entre visualização em planta e perspectiva">
+                    <button onClick={() => setIs3DMode(!is3DMode)} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all ${is3DMode ? 'bg-cad-accent text-white shadow-lg' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'}`}>{is3DMode ? <Box size={16}/> : <MapIcon size={16}/>} {is3DMode ? '3D' : '2D'}</button>
+                </AutoCADTooltip>
+             </div>
+        </div>
+        <div className="flex-1 bg-zinc-950 border border-white/10 rounded-xl relative overflow-hidden flex items-center justify-center shadow-inner group">
+           {is3DMode ? (
+               <div className="absolute inset-0">
+                    <Canvas camera={{ position: [50, 50, 50], fov: 45 }}>
+                        <Scene3D points={points} layers={layerConfigs} />
+                    </Canvas>
+               </div>
+           ) : (
+               <>
+                <div className="absolute inset-0 grid-cad-dark opacity-30 pointer-events-none"></div>
+                
+                {/* Visual Feedback for Split Candidate */}
+                {isSplitting && (
+                    <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-cad-accent text-white px-4 py-2 rounded-full text-xs font-bold shadow-lg shadow-cad-accent/30 pointer-events-none z-40 animate-bounce">
+                        Selecione um segmento para dividir
+                    </div>
+                )}
+
+                {/* Selection Summary Overlay */}
+                {selectedIds.size > 0 && (
+                    <div className="absolute left-4 top-4 z-40 bg-zinc-900/90 border border-white/10 p-4 rounded-xl shadow-2xl backdrop-blur animate-in slide-in-from-left-4 w-64">
+                         <div className="flex justify-between items-center mb-3">
+                             <div className="text-sm font-bold text-white flex items-center gap-2">
+                                 <MousePointer2 size={16} className="text-cad-accent"/>
+                                 Seleção ({selectedIds.size})
+                             </div>
+                             <button onClick={() => setSelectedIds(new Set())} className="p-1 hover:bg-white/10 rounded text-zinc-400 hover:text-white"><X size={14}/></button>
+                         </div>
+                         <div className="space-y-2 max-h-40 overflow-y-auto">
+                            {Array.from(selectedIds).slice(0, 5).map(id => {
+                                const p = points.find(pt => pt.id === id);
+                                return p ? (
+                                    <div key={id} className="flex justify-between text-xs bg-black/20 p-2 rounded border border-white/5">
+                                        <span className="text-white font-mono">{p.name}</span>
+                                        <span className="text-zinc-500">{p.desc}</span>
+                                    </div>
+                                ) : null;
+                            })}
+                            {selectedIds.size > 5 && <div className="text-xs text-center text-zinc-500 italic">...e mais {selectedIds.size - 5} itens</div>}
+                         </div>
+                         <div className="mt-3 pt-3 border-t border-white/10 flex gap-2">
+                             <button className="flex-1 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-xs rounded text-zinc-300">Propriedades</button>
+                             <button className="flex-1 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-500 text-xs rounded">Excluir</button>
+                         </div>
+                    </div>
+                )}
+
+                <div className={`absolute inset-0 overflow-hidden ${movingPointId ? 'cursor-grabbing' : 'cursor-crosshair'}`}
+                    onMouseDown={(e) => handleMapMouseDown(e)}
+                    onMouseUp={handleMapMouseUp} 
+                    onMouseLeave={handleMapMouseUp} 
+                    onMouseMove={handleMouseMove} 
+                    onWheel={handleWheel}
+                    onClick={(e) => handleMapClick(e)}
+                >
+                    <svg ref={svgRef} width="100%" height="100%" className="w-full h-full select-none">
+                        <g transform={`translate(${mapPan.x}, ${mapPan.y}) scale(${mapZoom})`}>
+                            <ContourLines />
+                            
+                            {/* Lines connecting points (Polygon/Path) */}
+                            <path d={`M ${normalizePoint(points[0]).x} ${normalizePoint(points[0]).y} ` + points.map(p => { if (!layerConfigs[p.desc]?.visible) return ''; const {x,y} = normalizePoint(p); return `L ${x} ${y}`; }).join(' ')} className="stroke-white/10 stroke-1 fill-none pointer-events-none" />
+                            
+                            {/* Split Candidate Preview */}
+                            {splitCandidate && (
+                                <g className="pointer-events-none">
+                                    <circle cx={normalizePoint(splitCandidate.point).x} cy={normalizePoint(splitCandidate.point).y} r={6 / mapZoom} className="fill-cad-accent animate-pulse" />
+                                    <circle cx={normalizePoint(splitCandidate.point).x} cy={normalizePoint(splitCandidate.point).y} r={12 / mapZoom} className="fill-none stroke-cad-accent stroke-[2px] opacity-50" />
+                                </g>
+                            )}
+
+                            {points.map((p) => {
+                                if (!layerConfigs[p.desc]?.visible) return null;
+                                const { x, y } = normalizePoint(p);
+                                const isSnapped = snapPoint?.id === p.id;
+                                const isSelected = selectedIds.has(p.id);
+                                const isMoving = movingPointId === p.id;
+                                const config = layerConfigs[p.desc];
+                                const pointRadius = visualSettings.pointSize / mapZoom;
+                                
+                                return (
+                                    <g key={p.id} onMouseDown={(e) => handleMapMouseDown(e, p)} className="cursor-pointer group/point">
+                                        {/* Visual Feedback: Selection or Moving */}
+                                        {(isSelected || isMoving) && (
+                                            <>
+                                                <circle cx={x} cy={y} r={(visualSettings.pointSize * (isMoving ? 5 : 3)) / mapZoom} fill={visualSettings.selectedColor} className={`opacity-20 ${isMoving ? 'animate-ping' : 'animate-pulse'}`} />
+                                                <circle cx={x} cy={y} r={(visualSettings.pointSize * (isMoving ? 6 : 4)) / mapZoom} className="fill-none stroke-cad-accent stroke-[1px] opacity-50" />
+                                            </>
+                                        )}
+                                        
+                                        {/* Hit area */}
+                                        <circle cx={x} cy={y} r={15 / mapZoom} className="fill-transparent" /> 
+                                        
+                                        {/* Snap Indicator */}
+                                        {isSnapped && !isSplitting && !isMoving && <circle cx={x} cy={y} r={12 / mapZoom} stroke={visualSettings.snapColor} className="fill-none stroke-[2px] opacity-75" />}
+                                        
+                                        {/* Main Point */}
+                                        <circle cx={x} cy={y} r={pointRadius} fill={isSelected ? visualSettings.selectedColor : (config?.color || '#06b6d4')} stroke={isSelected ? visualSettings.selectedColor : '#18181b'} strokeWidth={2 / mapZoom} className="transition-all duration-300 group-hover/point:fill-yellow-400" />
+                                        
+                                        {/* Label */}
+                                        <text x={x + (pointRadius + 4)} y={y - (pointRadius + 4)} fontSize={12 / mapZoom} className={`font-mono font-bold select-none pointer-events-none ${isSelected || isMoving ? 'fill-white text-shadow-glow' : 'fill-zinc-400'}`}>{p.name}</text>
+                                    </g>
+                                )
+                            })}
+
+                            {/* Midpoint Snap Indicator */}
+                            {snapMidpoint && (
+                                <g className="pointer-events-none">
+                                    <polygon points={`${snapMidpoint.point.x},${snapMidpoint.point.y - 10/mapZoom} ${snapMidpoint.point.x - 8/mapZoom},${snapMidpoint.point.y + 6/mapZoom} ${snapMidpoint.point.x + 8/mapZoom},${snapMidpoint.point.y + 6/mapZoom}`} fill={visualSettings.snapColor} />
+                                    <text x={snapMidpoint.point.x + 10/mapZoom} y={snapMidpoint.point.y} fontSize={10/mapZoom} fill={visualSettings.snapColor} className="font-mono">{snapMidpoint.label}</text>
+                                </g>
+                            )}
+
+                             {/* Grid Snap Indicator */}
+                            {snapGrid && (
+                                <g className="pointer-events-none">
+                                     <rect x={snapGrid.point.x - 5/mapZoom} y={snapGrid.point.y - 5/mapZoom} width={10/mapZoom} height={10/mapZoom} fill="none" stroke={visualSettings.snapColor} strokeWidth={1} />
+                                     <line x1={snapGrid.point.x - 10/mapZoom} y1={snapGrid.point.y} x2={snapGrid.point.x + 10/mapZoom} y2={snapGrid.point.y} stroke={visualSettings.snapColor} strokeWidth={1/mapZoom} />
+                                     <line x1={snapGrid.point.x} y1={snapGrid.point.y - 10/mapZoom} x2={snapGrid.point.x} y2={snapGrid.point.y + 10/mapZoom} stroke={visualSettings.snapColor} strokeWidth={1/mapZoom} />
+                                </g>
+                            )}
+
+                        </g>
+                    </svg>
+                </div>
+                <div className="absolute bottom-4 right-4 bg-zinc-900/90 p-4 rounded-lg border border-white/10 text-xs text-zinc-400 font-mono shadow-xl backdrop-blur pointer-events-none select-none">
+                    <div className="font-bold text-white mb-1">Propriedades</div>
+                    <div>Zoom: {(mapZoom * 100).toFixed(0)}%</div>
+                    <div>Pan: X{Math.round(mapPan.x)} Y{Math.round(mapPan.y)}</div>
+                    <div className="h-px bg-white/10 my-2"></div>
+                    <div className="flex items-center gap-2">
+                        {snapPoint ? (
+                             <>
+                                <div className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"></div>
+                                <span className="text-yellow-400 font-bold">SNAP: {snapPoint.name}</span>
+                             </>
+                        ) : snapMidpoint ? (
+                             <>
+                                <div className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"></div>
+                                <span className="text-yellow-400 font-bold">SNAP: {snapMidpoint.label}</span>
+                             </>
+                        ) : snapGrid ? (
+                             <>
+                                <div className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"></div>
+                                <span className="text-yellow-400 font-bold">SNAP: GRID</span>
+                             </>
+                        ) : (
+                             <>
+                                <div className="w-2 h-2 rounded-full bg-zinc-700"></div>
+                                <span className="text-zinc-600">Sem alvo</span>
+                             </>
+                        )}
+                    </div>
+                </div>
+               </>
+           )}
+        </div>
+      </div>
     );
-};
+  };
+
+  const renderTools = () => (
+      <div className="flex flex-col h-full animate-in fade-in duration-300">
+         <div className="flex items-center justify-between mb-6">
+            <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+               <Calculator className="text-cad-accent" /> Ferramentas de Cálculo
+            </h2>
+            {activeTool && (
+               <button onClick={() => setActiveTool(null)} className="text-sm text-zinc-400 hover:text-white flex items-center gap-1 border border-white/10 px-3 py-1.5 rounded hover:bg-white/5 transition-colors">
+                  <RefreshCw size={14}/> Voltar
+               </button>
+            )}
+         </div>
+         {!activeTool ? (
+            <div className="grid grid-cols-4 gap-4">
+                 {[
+                     { id: 'geodesia', label: 'Conversor Geodésico', icon: Globe, desc: 'UTM x Lat/Long' },
+                     { id: 'volume', label: 'Cálculo de Volume', icon: Component, desc: 'Corte e Aterro' },
+                     { id: 'perfil', label: 'Perfil Longitudinal', icon: TrendingUp, desc: 'Visualização de Greide' },
+                     { id: 'memorial', label: 'Memorial Descritivo', icon: FileText, desc: 'Gerar Documento' },
+                 ].map((tool) => (
+                     <button key={tool.id} onClick={() => setActiveTool(tool.id as ToolType)} className="flex flex-col items-center justify-center p-6 bg-zinc-900 border border-white/10 rounded-xl hover:bg-zinc-800 hover:border-cad-accent transition-all group">
+                        <div className="w-12 h-12 bg-black/50 rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                            <tool.icon size={24} className="text-cad-accent" />
+                        </div>
+                        <span className="font-bold text-white mb-1">{tool.label}</span>
+                        <span className="text-xs text-zinc-500">{tool.desc}</span>
+                     </button>
+                 ))}
+                 {[
+                     { id: 'reconstituicao', label: 'Reconstituição', icon: History },
+                     { id: 'incra', label: 'Padrão INCRA', icon: FileOutput },
+                     { id: 'modelagem', label: 'Modelagem 3D', icon: Box },
+                  ].map((tool) => (
+                     <button key={tool.id} onClick={() => setActiveTool(tool.id as ToolType)} className="flex flex-col items-center justify-center p-6 bg-zinc-900/50 border border-white/5 rounded-xl hover:bg-zinc-900 hover:border-white/20 transition-all group opacity-60 hover:opacity-100">
+                        <div className="w-12 h-12 bg-black/30 rounded-full flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                            <tool.icon size={24} className="text-zinc-600 group-hover:text-zinc-400" />
+                        </div>
+                        <span className="font-bold text-zinc-400 mb-1">{tool.label}</span>
+                        <span className="text-xs text-zinc-600">Em breve</span>
+                     </button>
+                 ))}
+            </div>
+         ) : (
+            <div className="bg-zinc-900 border border-white/10 rounded-xl p-6 flex-1 overflow-y-auto relative">
+                 {activeTool === 'geodesia' && <GeodesiaTool points={points} />}
+                 {activeTool === 'volume' && <VolumeTool points={points} />}
+                 {activeTool === 'perfil' && <PerfilTool points={points} />}
+                 {activeTool === 'memorial' && <MemorialTool points={points} />}
+                 {!['geodesia', 'volume', 'perfil', 'memorial'].includes(activeTool) && (
+                     <div className="flex flex-col items-center justify-center h-full text-zinc-500">
+                         <AlertCircle size={48} className="mb-4 opacity-50"/>
+                         <p>Ferramenta em desenvolvimento.</p>
+                     </div>
+                 )}
+            </div>
+         )}
+      </div>
+  );
+
+  return (
+    <div className="flex h-screen w-full bg-[#09090b] text-zinc-100 overflow-hidden font-sans">
+      <div className="w-64 bg-[#18181b] border-r border-white/5 flex flex-col shrink-0 z-30">
+        <Logo />
+        <div className="flex-1 py-6 px-3 space-y-1 overflow-y-auto">
+           <button onClick={() => setActiveTab('dados')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === 'dados' ? 'bg-cad-accent text-white shadow-lg shadow-cad-accent/20' : 'text-zinc-400 hover:bg-white/5 hover:text-white'}`}><Table2 size={18} /> Dados Brutos</button>
+           <button onClick={() => setActiveTab('mapa')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === 'mapa' ? 'bg-cad-accent text-white shadow-lg shadow-cad-accent/20' : 'text-zinc-400 hover:bg-white/5 hover:text-white'}`}><MapIcon size={18} /> Mapa Visual</button>
+           <button onClick={() => setActiveTab('ferramentas')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === 'ferramentas' ? 'bg-cad-accent text-white shadow-lg shadow-cad-accent/20' : 'text-zinc-400 hover:bg-white/5 hover:text-white'}`}><Calculator size={18} /> Ferramentas</button>
+           <button onClick={() => setActiveTab('relatorios')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${activeTab === 'relatorios' ? 'bg-cad-accent text-white shadow-lg shadow-cad-accent/20' : 'text-zinc-400 hover:bg-white/5 hover:text-white'}`}><FileText size={18} /> Relatórios</button>
+        </div>
+        <div className="p-4 border-t border-white/5 space-y-2">
+           <button onClick={() => setShowVersionModal(true)} className="w-full flex items-center gap-3 px-4 py-3 text-zinc-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors text-sm"><History size={18} /> Versões / Snapshots</button>
+           <button onClick={() => setShowSettingsModal(true)} className="w-full flex items-center gap-3 px-4 py-3 text-zinc-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors text-sm"><Settings size={18} /> Configurações</button>
+           <div className="mt-4 flex items-center gap-3 px-2">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-purple-500 to-pink-500 ring-2 ring-black"></div>
+              <div className="flex flex-col"><span className="text-xs font-bold text-white">Eng. Civil</span><span className="text-[10px] text-zinc-500">Versão 3.0 Pro</span></div>
+           </div>
+        </div>
+      </div>
+      <div className="flex-1 flex flex-col min-w-0 bg-[#09090b] relative">
+         <div className="absolute inset-0 grid-cad-dark opacity-50 pointer-events-none"></div>
+         <header className="h-16 border-b border-white/5 flex items-center justify-between px-8 bg-[#09090b]/80 backdrop-blur z-20">
+            <div className="flex items-center gap-4 text-sm text-zinc-500"><span className="text-white font-medium">Projeto Ativo:</span> Levantamento Topográfico - Fazenda Sta. Maria</div>
+            <div className="flex items-center gap-4"><span className="flex items-center gap-1.5 px-2 py-1 bg-emerald-500/10 text-emerald-500 text-xs rounded border border-emerald-500/20 font-medium"><div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div> Online</span></div>
+         </header>
+         <main className="flex-1 p-8 overflow-hidden z-10 relative">
+            {activeTab === 'dados' && renderDataTable()}
+            {activeTab === 'mapa' && renderMap()}
+            {activeTab === 'ferramentas' && renderTools()}
+            {activeTab === 'relatorios' && renderReports()}
+            {showImportModal && <CSVImportModal onClose={() => setShowImportModal(false)} onImport={(pts) => setPoints([...points, ...pts])} />}
+            {showNewPointModal && <NewPointModal onClose={() => setShowNewPointModal(false)} onSave={(p) => setPoints([...points, p])} />}
+            {showSettingsModal && <SettingsModal settings={visualSettings} onSave={updateVisualSettings} onClose={() => setShowSettingsModal(false)} layerConfigs={layerConfigs} setLayerConfigs={setLayerConfigs} />}
+            {showVersionModal && <VersionControlModal onClose={() => setShowVersionModal(false)} currentPoints={points} onLoad={setPoints} />}
+         </main>
+      </div>
+    </div>
+  );
+}
 
 const root = createRoot(document.getElementById('root')!);
 root.render(<App />);
