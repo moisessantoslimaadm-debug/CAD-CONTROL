@@ -120,6 +120,14 @@ interface Edge {
     p2: Point;
 }
 
+// Triangle structure for Surface
+interface Tri {
+    p1: Point;
+    p2: Point;
+    p3: Point;
+    avgZ: number;
+}
+
 type ToolType = 'geodesia' | 'memorial' | 'reconstituicao' | 'modelagem' | 'curvas' | 'perfil' | 'secoes' | 'georref' | 'incra' | 'volume' | 'greide' | 'declividade' | 'plato' | null;
 
 // --- Mock Data ---
@@ -199,6 +207,14 @@ const calculateDistance3D = (p1: Point, p2: Point) => {
     const dZ = p2.z - p1.z;
     const dS = Math.sqrt(Math.pow(dH, 2) + Math.pow(dZ, 2));
     return { horizontal: dH, slope: dS, deltaZ: dZ, grade: (dZ/dH)*100 };
+};
+
+const getElevationColor = (z: number, min: number, range: number) => {
+    // Simple heatmap: Blue (low) -> Green -> Yellow -> Red (high)
+    const t = Math.max(0, Math.min(1, (z - min) / (range || 1)));
+    // Hue goes from 240 (blue) to 0 (red)
+    const hue = (1 - t) * 240;
+    return `hsl(${hue}, 70%, 50%)`;
 };
 
 // --- Sub-Components ---
@@ -289,8 +305,8 @@ const ResizableHeader = ({
 
 // 1. Geodésia Tool
 const GeodesiaTool = ({ points }: { points: Point[] }) => {
-  const [selectedPoint, setSelectedPoint] = useState(points[0].id);
-  const p = points.find(pt => pt.id === selectedPoint) || points[0];
+  const [selectedPoint, setSelectedPoint] = useState(points[0]?.id || '');
+  const p = points.find(pt => pt.id === selectedPoint) || points[0] || { n: 0, e: 0 };
   const { lat, long } = fakeGeoConvert(p.n, p.e);
 
   return (
@@ -347,6 +363,7 @@ const GeodesiaTool = ({ points }: { points: Point[] }) => {
 // 2. Memorial Tool
 const MemorialTool = ({ points }: { points: Point[] }) => {
   const text = useMemo(() => {
+    if (points.length === 0) return "Nenhum ponto disponível.";
     return `MEMORIAL DESCRITIVO\n\nImóvel: Fazenda Santa Maria\nProprietário: Cliente Exemplo LTDA\n\nDESCRIÇÃO:\nInicia-se no vértice ${points[0]?.name} (N=${points[0]?.n.toFixed(3)}, E=${points[0]?.e.toFixed(3)})...`;
   }, [points]);
 
@@ -385,7 +402,7 @@ const PerfilTool = ({ points }: { points: Point[] }) => {
 // 4. Volume Tool
 const VolumeTool = ({ points }: { points: Point[] }) => {
   const [cotaPlato, setCotaPlato] = useState(102);
-  const avgZ = points.reduce((acc, p) => acc + p.z, 0) / points.length;
+  const avgZ = points.length ? points.reduce((acc, p) => acc + p.z, 0) / points.length : 0;
   const area = 1540.50; 
   const diff = avgZ - cotaPlato;
   const volume = Math.abs(diff * area);
@@ -868,9 +885,9 @@ const Scene3D = ({ points, layers }: {
   points: Point[], 
   layers: Record<string, LayerConfig>
 }) => {
-  const centerN = useMemo(() => points.reduce((acc, p) => acc + p.n, 0) / points.length, [points]);
-  const centerE = useMemo(() => points.reduce((acc, p) => acc + p.e, 0) / points.length, [points]);
-  const minZ = useMemo(() => Math.min(...points.map(p => p.z)), [points]);
+  const centerN = useMemo(() => points.length ? points.reduce((acc, p) => acc + p.n, 0) / points.length : 0, [points]);
+  const centerE = useMemo(() => points.length ? points.reduce((acc, p) => acc + p.e, 0) / points.length : 0, [points]);
+  const minZ = useMemo(() => points.length ? Math.min(...points.map(p => p.z)) : 0, [points]);
 
   return (
     <>
@@ -945,6 +962,7 @@ function App() {
   const [snapGrid, setSnapGrid] = useState<{ point: {x: number, y: number} } | null>(null);
   const [showContours, setShowContours] = useState(false);
   const [showTIN, setShowTIN] = useState(false);
+  const [showHypsometry, setShowHypsometry] = useState(false);
   const [movingPointId, setMovingPointId] = useState<string | null>(null);
   const [contourInterval, setContourInterval] = useState(1);
   const [cursorTooltip, setCursorTooltip] = useState({ x: 0, y: 0, text: '' });
@@ -1032,6 +1050,7 @@ function App() {
 
   // --- Helpers ---
   const getMapExtent = () => {
+    if (points.length === 0) return { minN: 0, maxN: 100, minE: 0, maxE: 100 };
     const ns = points.map(p => p.n);
     const es = points.map(p => p.e);
     return {
@@ -1065,7 +1084,6 @@ function App() {
   };
 
   const generateKML = (selectionOnly: boolean = false) => {
-      // (Implementation same as previous version)
       let pointsToExport = points;
       if (selectionOnly) {
           if (selectedIds.size === 0) {
@@ -1148,14 +1166,14 @@ function App() {
   };
 
   // --- TIN & Contour Logic ---
+  
+  // 1. Calculate Edges (Nearest Neighbors Graph)
   const tinMesh = useMemo(() => {
-      // Simplified Delaunay approximation (k-nearest neighbors) for visualization
       const edges: Edge[] = [];
       const connected = new Set<string>();
 
       points.forEach(p1 => {
           if (!layerConfigs[p1.desc]?.visible) return;
-          
           // Find 3 nearest neighbors
           const neighbors = points
               .filter(p2 => p2.id !== p1.id && layerConfigs[p2.desc]?.visible)
@@ -1164,7 +1182,7 @@ function App() {
                   dist: Math.sqrt(Math.pow(p2.n - p1.n, 2) + Math.pow(p2.e - p1.e, 2))
               }))
               .sort((a, b) => a.dist - b.dist)
-              .slice(0, 3);
+              .slice(0, 3); // K=3 for triangulation approximation
 
           neighbors.forEach(n => {
               const id1 = [p1.id, n.p.id].sort().join('-');
@@ -1177,67 +1195,84 @@ function App() {
       return edges;
   }, [points, layerConfigs]);
 
+  // 2. Identify Triangles from Edges (for Surface Rendering and Contours)
+  const triangles = useMemo(() => {
+      const tris: Tri[] = [];
+      const triSet = new Set<string>();
+
+      // Simple cycle detection of length 3 on the graph
+      // Iterate edges, check if endpoints share a common neighbor
+      tinMesh.forEach(edge => {
+          const { p1, p2 } = edge;
+          
+          // Find points connected to both p1 and p2
+          const common = points.filter(p3 => {
+              if (p3.id === p1.id || p3.id === p2.id) return false;
+              if (!layerConfigs[p3.desc]?.visible) return false;
+              
+              const e1 = tinMesh.some(e => (e.p1.id === p1.id && e.p2.id === p3.id) || (e.p1.id === p3.id && e.p2.id === p1.id));
+              const e2 = tinMesh.some(e => (e.p1.id === p2.id && e.p2.id === p3.id) || (e.p1.id === p3.id && e.p2.id === p2.id));
+              return e1 && e2;
+          });
+
+          common.forEach(p3 => {
+              const ids = [p1.id, p2.id, p3.id].sort().join('-');
+              if (!triSet.has(ids)) {
+                  triSet.add(ids);
+                  tris.push({ p1, p2, p3, avgZ: (p1.z + p2.z + p3.z) / 3 });
+              }
+          });
+      });
+      return tris;
+  }, [tinMesh, points, layerConfigs]);
+
+  // 3. Calculate Contour Segments
   const refinedContours = useMemo(() => {
       if (!showContours) return [];
       const segments: {z: number, p1: {x:number, y:number}, p2: {x:number, y:number}}[] = [];
       
-      points.forEach(p1 => {
-           if (!layerConfigs[p1.desc]?.visible) return;
-           // Find neighbors used in TIN
-           const neighbors = tinMesh
-                .filter(e => e.p1.id === p1.id || e.p2.id === p1.id)
-                .map(e => e.p1.id === p1.id ? e.p2 : e.p1);
+      triangles.forEach(tri => {
+           const { p1, p2, p3 } = tri;
+           const zMin = Math.min(p1.z, p2.z, p3.z);
+           const zMax = Math.max(p1.z, p2.z, p3.z);
            
-           for(let i=0; i<neighbors.length; i++) {
-               for(let j=i+1; j<neighbors.length; j++) {
-                   const p2 = neighbors[i];
-                   const p3 = neighbors[j];
-                   // Check if p2 and p3 are connected in mesh
-                   const isConnected = tinMesh.some(e => (e.p1.id === p2.id && e.p2.id === p3.id) || (e.p1.id === p3.id && e.p2.id === p2.id));
-                   
-                   if (isConnected) {
-                       // We have a triangle p1-p2-p3.
-                       const zMin = Math.min(p1.z, p2.z, p3.z);
-                       const zMax = Math.max(p1.z, p2.z, p3.z);
-                       
-                       const startZ = Math.ceil(zMin / contourInterval) * contourInterval;
-                       
-                       for (let z = startZ; z <= zMax; z += contourInterval) {
-                           // Find intersections on edges
-                           const intersections = [];
-                           
-                           // Edge p1-p2
-                           if ((p1.z <= z && p2.z > z) || (p2.z <= z && p1.z > z)) {
-                               const t = (z - p1.z) / (p2.z - p1.z);
-                               const n1 = normalizePoint(p1);
-                               const n2 = normalizePoint(p2);
-                               intersections.push({ x: n1.x + (n2.x - n1.x)*t, y: n1.y + (n2.y - n1.y)*t });
-                           }
-                           // Edge p2-p3
-                           if ((p2.z <= z && p3.z > z) || (p3.z <= z && p2.z > z)) {
-                               const t = (z - p2.z) / (p3.z - p2.z);
-                               const n1 = normalizePoint(p2);
-                               const n2 = normalizePoint(p3);
-                               intersections.push({ x: n1.x + (n2.x - n1.x)*t, y: n1.y + (n2.y - n1.y)*t });
-                           }
-                           // Edge p3-p1
-                           if ((p3.z <= z && p1.z > z) || (p1.z <= z && p3.z > z)) {
-                               const t = (z - p3.z) / (p1.z - p3.z);
-                               const n1 = normalizePoint(p3);
-                               const n2 = normalizePoint(p1);
-                               intersections.push({ x: n1.x + (n2.x - n1.x)*t, y: n1.y + (n2.y - n1.y)*t });
-                           }
-                           
-                           if (intersections.length === 2) {
-                               segments.push({ z, p1: intersections[0], p2: intersections[1] });
-                           }
-                       }
-                   }
+           if (!isFinite(zMin) || !isFinite(zMax)) return;
+
+           const startZ = Math.ceil(zMin / contourInterval) * contourInterval;
+           
+           for (let z = startZ; z <= zMax; z += contourInterval) {
+               // Find intersections on edges
+               const intersections = [];
+               
+               // Edge p1-p2
+               if ((p1.z <= z && p2.z > z) || (p2.z <= z && p1.z > z)) {
+                   const t = (z - p1.z) / (p2.z - p1.z);
+                   const n1 = normalizePoint(p1);
+                   const n2 = normalizePoint(p2);
+                   intersections.push({ x: n1.x + (n2.x - n1.x)*t, y: n1.y + (n2.y - n1.y)*t });
+               }
+               // Edge p2-p3
+               if ((p2.z <= z && p3.z > z) || (p3.z <= z && p2.z > z)) {
+                   const t = (z - p2.z) / (p3.z - p2.z);
+                   const n1 = normalizePoint(p2);
+                   const n2 = normalizePoint(p3);
+                   intersections.push({ x: n1.x + (n2.x - n1.x)*t, y: n1.y + (n2.y - n1.y)*t });
+               }
+               // Edge p3-p1
+               if ((p3.z <= z && p1.z > z) || (p1.z <= z && p3.z > z)) {
+                   const t = (z - p3.z) / (p1.z - p3.z);
+                   const n1 = normalizePoint(p3);
+                   const n2 = normalizePoint(p1);
+                   intersections.push({ x: n1.x + (n2.x - n1.x)*t, y: n1.y + (n2.y - n1.y)*t });
+               }
+               
+               if (intersections.length === 2) {
+                   segments.push({ z, p1: intersections[0], p2: intersections[1] });
                }
            }
       });
       return segments;
-  }, [points, tinMesh, showContours, contourInterval]);
+  }, [triangles, showContours, contourInterval]);
 
 
   // --- Actions ---
@@ -1661,6 +1696,12 @@ function App() {
   );
 
   const renderMap = () => {
+    // Determine min/max Z for color ramp
+    const allZ = points.map(p => p.z);
+    const minZ = allZ.length ? Math.min(...allZ) : 0;
+    const maxZ = allZ.length ? Math.max(...allZ) : 100;
+    const rangeZ = maxZ - minZ;
+
     return (
       <div className="flex flex-col h-full animate-in fade-in duration-300">
         <div className="flex items-center justify-between mb-4 gap-4">
@@ -1726,6 +1767,16 @@ function App() {
                         </select>
                     )}
                   </div>
+
+                  {/* Hypsometric Tinting Toggle */}
+                  <AutoCADTooltip title="Mapa Hipsométrico" desc="Colorir por Elevação (Calor)">
+                    <button 
+                        onClick={() => setShowHypsometry(!showHypsometry)}
+                        className={`p-2 rounded-lg transition-all ${showHypsometry ? 'bg-orange-500/20 text-orange-400 border border-orange-500/50' : 'text-zinc-400 hover:bg-zinc-800'}`}
+                    >
+                        <Palette size={18} />
+                    </button>
+                  </AutoCADTooltip>
 
                   <div className="h-6 w-px bg-white/10 mx-2"></div>
                   
@@ -1920,7 +1971,23 @@ function App() {
                     <svg ref={svgRef} width="100%" height="100%" className="w-full h-full select-none">
                         <g transform={`translate(${mapPan.x}, ${mapPan.y}) scale(${mapZoom})`}>
                             
-                            {/* TIN Surface Visualization */}
+                            {/* Hypsometric Tinting (Elevation Map) */}
+                            {showHypsometry && triangles.map((tri, i) => {
+                                const p1 = normalizePoint(tri.p1);
+                                const p2 = normalizePoint(tri.p2);
+                                const p3 = normalizePoint(tri.p3);
+                                return (
+                                    <polygon 
+                                        key={`tri-${i}`}
+                                        points={`${p1.x},${p1.y} ${p2.x},${p2.y} ${p3.x},${p3.y}`}
+                                        fill={getElevationColor(tri.avgZ, minZ, rangeZ)}
+                                        opacity={0.5}
+                                        stroke="none"
+                                    />
+                                )
+                            })}
+
+                            {/* TIN Surface Visualization (Wireframe) */}
                             {showTIN && tinMesh.map((edge, i) => {
                                 const p1 = normalizePoint(edge.p1);
                                 const p2 = normalizePoint(edge.p2);
@@ -1945,24 +2012,39 @@ function App() {
                                             strokeWidth={(isMaster ? 1.5 : 0.5) / mapZoom} 
                                             opacity={isMaster ? 0.8 : 0.4} 
                                         />
-                                        {isMaster && (i % 3 === 0) && ( // Optimization: Don't label every segment, sparse labeling
-                                            <text 
-                                                x={midX} y={midY} 
-                                                fontSize={8/mapZoom} 
-                                                fill="#f59e0b" 
-                                                textAnchor="middle" 
-                                                alignmentBaseline="middle"
-                                                className="font-mono bg-black"
-                                            >
-                                                {seg.z}
-                                            </text>
+                                        {isMaster && (i % 2 === 0) && ( // Optimization: Don't label every segment
+                                            <g>
+                                                {/* Text Halo for readability */}
+                                                <text 
+                                                    x={midX} y={midY} 
+                                                    fontSize={8/mapZoom} 
+                                                    stroke="#18181b" 
+                                                    strokeWidth={3/mapZoom}
+                                                    strokeLinejoin="round"
+                                                    textAnchor="middle" 
+                                                    alignmentBaseline="middle"
+                                                    className="font-mono opacity-80"
+                                                >
+                                                    {seg.z}
+                                                </text>
+                                                <text 
+                                                    x={midX} y={midY} 
+                                                    fontSize={8/mapZoom} 
+                                                    fill="#f59e0b" 
+                                                    textAnchor="middle" 
+                                                    alignmentBaseline="middle"
+                                                    className="font-mono font-bold"
+                                                >
+                                                    {seg.z}
+                                                </text>
+                                            </g>
                                         )}
                                     </g>
                                 )
                             })}
 
                             {/* Lines connecting points (Polygon/Path) - Only visible if not TIN mode for cleaner look */}
-                            {!showTIN && (
+                            {!showTIN && !showHypsometry && (
                                 <path d={`M ${normalizePoint(points[0]).x} ${normalizePoint(points[0]).y} ` + points.map(p => { if (!layerConfigs[p.desc]?.visible) return ''; const {x,y} = normalizePoint(p); return `L ${x} ${y}`; }).join(' ')} className="stroke-white/10 stroke-1 fill-none pointer-events-none" />
                             )}
                             
