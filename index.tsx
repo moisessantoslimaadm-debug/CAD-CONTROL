@@ -52,7 +52,8 @@ import {
   PenTool,
   Network,
   Waypoints,
-  Move3d
+  Move3d,
+  MousePointerClick
 } from 'lucide-react';
 import './index.css';
 
@@ -945,6 +946,8 @@ function App() {
   const [showContours, setShowContours] = useState(false);
   const [showTIN, setShowTIN] = useState(false);
   const [movingPointId, setMovingPointId] = useState<string | null>(null);
+  const [contourInterval, setContourInterval] = useState(1);
+  const [cursorTooltip, setCursorTooltip] = useState({ x: 0, y: 0, text: '' });
   
   // Civil Tools State
   const [measureMode, setMeasureMode] = useState(false);
@@ -1147,7 +1150,6 @@ function App() {
   // --- TIN & Contour Logic ---
   const tinMesh = useMemo(() => {
       // Simplified Delaunay approximation (k-nearest neighbors) for visualization
-      // In a real app, use d3-delaunay
       const edges: Edge[] = [];
       const connected = new Set<string>();
 
@@ -1175,75 +1177,9 @@ function App() {
       return edges;
   }, [points, layerConfigs]);
 
-  const contourPaths = useMemo(() => {
-      if (!showContours) return [];
-      
-      const interval = 1; // 1 meter contours
-      const minZ = Math.floor(Math.min(...points.map(p => p.z)));
-      const maxZ = Math.ceil(Math.max(...points.map(p => p.z)));
-      const contours: { z: number, lines: {x1:number, y1:number, x2:number, y2:number}[] }[] = [];
-
-      for (let z = minZ; z <= maxZ; z += interval) {
-          const lines: {x1:number, y1:number, x2:number, y2:number}[] = [];
-          tinMesh.forEach(edge => {
-              const minE = Math.min(edge.p1.z, edge.p2.z);
-              const maxE = Math.max(edge.p1.z, edge.p2.z);
-              
-              if (z > minE && z <= maxE) {
-                  const ratio = (z - edge.p1.z) / (edge.p2.z - edge.p1.z);
-                  const p1n = normalizePoint(edge.p1);
-                  const p2n = normalizePoint(edge.p2);
-                  
-                  // Linear Interpolation
-                  // Real World Coords for logic (handled by ratio), Screen Coords for drawing
-                  const ix = p1n.x + (p2n.x - p1n.x) * ratio;
-                  const iy = p1n.y + (p2n.y - p1n.y) * ratio;
-                  
-                  // We need connected triangles to draw full lines, but for this approximation
-                  // we will draw short segments or points. 
-                  // For better viz in this constrained tech stack, simple segments across edges
-                  // usually look like dashed contours unless we traverse the graph.
-                  // Let's draw a perpendicular tic or simplified segment.
-                  // Actually, strictly drawing intersections on edges looks like points. 
-                  // To draw lines, we need to know the 'next' edge. 
-                  // Simplified approach: Render segments if we had a full triangle list.
-                  // Since we only have edges, we will just render the mesh intersection points visually
-                  // or simple lines if we assume triangle connectivity.
-                  
-                  // REVISION: Let's assume the mesh is dense enough that simple edge traversal
-                  // might visually approximate lines if we had triangles.
-                  // Without full triangles, we return intersection points.
-                  
-                  // BETTER VISUAL: Just simple interpolation lines between *triangles*. 
-                  // Since we don't have explicit triangles, let's revert to a simpler "Grid" contour
-                  // or just render the TIN.
-                  
-                  // Fallback: Return the calculated point on edge to visualize 'cuts'
-                  lines.push({ x1: ix, y1: iy, x2: ix+1, y2: iy+1 }); // Tiny segment
-              }
-          });
-          if(lines.length > 0) contours.push({ z, lines });
-      }
-      
-      // Since creating connected contour lines without a proper triangle list is math-heavy,
-      // we will use the "TIN Surface" toggle to show the structure and a "Gradient" approach for contours?
-      // No, let's try to simulate linear segments by finding nearby intersections.
-      // Optimization: We will just draw the TIN and color code the vertices for now, 
-      // but keeping the 'contours' array structure if we want to expand later.
-      
-      return contours;
-  }, [points, tinMesh, showContours]);
-
-  // Actually, let's implement a better visual for contours:
-  // Connect intersections within triangles.
-  // Since we built edges by KNN, we basically have triangles.
   const refinedContours = useMemo(() => {
       if (!showContours) return [];
       const segments: {z: number, p1: {x:number, y:number}, p2: {x:number, y:number}}[] = [];
-      
-      // Brute force triangle finding from edges (3 connected points)
-      // This is expensive O(N^3) effectively but N is small here.
-      // Optimization: use the pre-calculated neighbors.
       
       points.forEach(p1 => {
            if (!layerConfigs[p1.desc]?.visible) return;
@@ -1252,7 +1188,6 @@ function App() {
                 .filter(e => e.p1.id === p1.id || e.p2.id === p1.id)
                 .map(e => e.p1.id === p1.id ? e.p2 : e.p1);
            
-           // Check if any two neighbors are connected to form a triangle
            for(let i=0; i<neighbors.length; i++) {
                for(let j=i+1; j<neighbors.length; j++) {
                    const p2 = neighbors[i];
@@ -1262,12 +1197,12 @@ function App() {
                    
                    if (isConnected) {
                        // We have a triangle p1-p2-p3.
-                       // Calculate contours for this triangle.
                        const zMin = Math.min(p1.z, p2.z, p3.z);
                        const zMax = Math.max(p1.z, p2.z, p3.z);
-                       const interval = 1;
                        
-                       for (let z = Math.ceil(zMin); z <= Math.floor(zMax); z += interval) {
+                       const startZ = Math.ceil(zMin / contourInterval) * contourInterval;
+                       
+                       for (let z = startZ; z <= zMax; z += contourInterval) {
                            // Find intersections on edges
                            const intersections = [];
                            
@@ -1302,7 +1237,7 @@ function App() {
            }
       });
       return segments;
-  }, [points, tinMesh, showContours]);
+  }, [points, tinMesh, showContours, contourInterval]);
 
 
   // --- Actions ---
@@ -1386,7 +1321,6 @@ function App() {
 
     // 1. Splitting Logic (Line Detection)
     if (isSplitting) {
-        // (Existing splitting logic...)
         let bestSplit: {idx: number, point: Point, dist: number} | null = null;
         for(let i=0; i<points.length-1; i++) {
             const p1 = normalizePoint(points[i]);
@@ -1414,6 +1348,12 @@ function App() {
             }
         }
         setSplitCandidate(bestSplit ? { idx: bestSplit.idx, point: bestSplit.point } : null);
+        
+        setCursorTooltip({ 
+            x: e.clientX, 
+            y: e.clientY, 
+            text: 'Ferramenta: Dividir' 
+        });
         return;
     }
 
@@ -1466,7 +1406,7 @@ function App() {
         if (!foundVertex && !snapMidpoint && snapSettings.grid) {
             // Get Mouse World Position
             const worldPos = denormalize(worldMouseX, worldMouseY);
-            const gridInterval = snapSettings.gridInterval || 5; // Snap to nearest interval (5m default)
+            const gridInterval = snapSettings.gridInterval || 5; 
             const snappedN = Math.round(worldPos.n / gridInterval) * gridInterval;
             const snappedE = Math.round(worldPos.e / gridInterval) * gridInterval;
             
@@ -1489,6 +1429,24 @@ function App() {
         setSnapMidpoint(null);
         setSnapGrid(null);
     }
+
+    // Update Tooltip Text
+    let toolText = '';
+    if (measureMode) toolText = 'Ferramenta: Medição';
+    else if (alignmentMode) toolText = 'Ferramenta: Eixo';
+    else if (isSplitting) toolText = 'Ferramenta: Dividir';
+    else if (movingPointId) toolText = 'Ação: Mover Ponto';
+    
+    // Snap overrides generic tool text if active (precision is key)
+    if (snapPoint) toolText = `SNAP: ${snapPoint.name}`;
+    else if (snapMidpoint) toolText = `SNAP: ${snapMidpoint.label}`;
+    else if (snapGrid) toolText = 'SNAP: GRADE';
+
+    setCursorTooltip({ 
+        x: e.clientX, 
+        y: e.clientY, 
+        text: toolText 
+    });
   };
 
   const handleMapMouseDown = (e: React.MouseEvent, p?: Point) => {
@@ -1745,14 +1703,29 @@ function App() {
                     </button>
                   </AutoCADTooltip>
 
-                  <AutoCADTooltip title="Curvas de Nível" desc="Alternar isolinhas">
-                    <button 
-                        onClick={() => setShowContours(!showContours)}
-                        className={`p-2 rounded-lg transition-all ${showContours ? 'bg-amber-500/20 text-amber-500 border border-amber-500/50' : 'text-zinc-400 hover:bg-zinc-800'}`}
-                    >
-                        <Mountain size={18} />
-                    </button>
-                  </AutoCADTooltip>
+                  <div className="flex items-center gap-1 bg-zinc-900 rounded-lg p-1 border border-white/10">
+                    <AutoCADTooltip title="Curvas de Nível" desc="Alternar isolinhas">
+                        <button 
+                            onClick={() => setShowContours(!showContours)}
+                            className={`p-2 rounded-lg transition-all ${showContours ? 'bg-amber-500/20 text-amber-500 border border-amber-500/50' : 'text-zinc-400 hover:bg-zinc-800'}`}
+                        >
+                            <Mountain size={18} />
+                        </button>
+                    </AutoCADTooltip>
+                    {showContours && (
+                        <select 
+                            value={contourInterval} 
+                            onChange={(e) => setContourInterval(Number(e.target.value))}
+                            className="bg-transparent text-[10px] text-zinc-300 font-bold border-l border-white/10 ml-1 pl-1 outline-none cursor-pointer hover:text-white"
+                            title="Equidistância Vertical"
+                        >
+                            <option value="0.5">0.5m</option>
+                            <option value="1">1.0m</option>
+                            <option value="2">2.0m</option>
+                            <option value="5">5.0m</option>
+                        </select>
+                    )}
+                  </div>
 
                   <div className="h-6 w-px bg-white/10 mx-2"></div>
                   
@@ -1862,9 +1835,9 @@ function App() {
                 </AutoCADTooltip>
              </div>
         </div>
-        <div className="flex-1 bg-zinc-950 border border-white/10 rounded-xl relative overflow-hidden flex items-center justify-center shadow-inner group">
+        <div className="flex-1 bg-zinc-950 border border-white/10 rounded-xl relative overflow-hidden flex items-center justify-center shadow-inner group cursor-none" onMouseLeave={() => setCursorTooltip({ ...cursorTooltip, text: '' })}>
            {is3DMode ? (
-               <div className="absolute inset-0">
+               <div className="absolute inset-0 cursor-default">
                     <Canvas camera={{ position: [50, 50, 50], fov: 45 }}>
                         <Scene3D points={points} layers={layerConfigs} />
                     </Canvas>
@@ -1958,16 +1931,33 @@ function App() {
 
                             {/* Refined Contour Lines */}
                             {refinedContours.map((seg, i) => {
-                                const isMaster = seg.z % 5 === 0;
+                                const isMaster = seg.z % (contourInterval * 5) === 0;
+                                // Simple midpoint label for master contours
+                                const midX = (seg.p1.x + seg.p2.x) / 2;
+                                const midY = (seg.p1.y + seg.p2.y) / 2;
+                                
                                 return (
-                                    <line 
-                                        key={`cont-${i}`} 
-                                        x1={seg.p1.x} y1={seg.p1.y} 
-                                        x2={seg.p2.x} y2={seg.p2.y} 
-                                        stroke={isMaster ? "#f59e0b" : "#fcd34d"} 
-                                        strokeWidth={(isMaster ? 1.5 : 0.5) / mapZoom} 
-                                        opacity={isMaster ? 0.8 : 0.4} 
-                                    />
+                                    <g key={`cont-${i}`}>
+                                        <line 
+                                            x1={seg.p1.x} y1={seg.p1.y} 
+                                            x2={seg.p2.x} y2={seg.p2.y} 
+                                            stroke={isMaster ? "#f59e0b" : "#fcd34d"} 
+                                            strokeWidth={(isMaster ? 1.5 : 0.5) / mapZoom} 
+                                            opacity={isMaster ? 0.8 : 0.4} 
+                                        />
+                                        {isMaster && (i % 3 === 0) && ( // Optimization: Don't label every segment, sparse labeling
+                                            <text 
+                                                x={midX} y={midY} 
+                                                fontSize={8/mapZoom} 
+                                                fill="#f59e0b" 
+                                                textAnchor="middle" 
+                                                alignmentBaseline="middle"
+                                                className="font-mono bg-black"
+                                            >
+                                                {seg.z}
+                                            </text>
+                                        )}
+                                    </g>
                                 )
                             })}
 
@@ -2069,6 +2059,16 @@ function App() {
                         </g>
                     </svg>
                 </div>
+                {/* Floating Cursor Tooltip */}
+                {cursorTooltip.text && (
+                    <div 
+                        className="fixed z-50 pointer-events-none bg-zinc-900/90 text-white text-[10px] px-2 py-1 rounded shadow-lg backdrop-blur font-bold border border-white/20 transform -translate-x-1/2 -translate-y-full mt-[-15px]"
+                        style={{ left: cursorTooltip.x, top: cursorTooltip.y }}
+                    >
+                        {cursorTooltip.text}
+                    </div>
+                )}
+
                 <div className="absolute bottom-4 right-4 bg-zinc-900/90 p-4 rounded-lg border border-white/10 text-xs text-zinc-400 font-mono shadow-xl backdrop-blur pointer-events-none select-none">
                     <div className="font-bold text-white mb-1">Propriedades</div>
                     <div>Zoom: {(mapZoom * 100).toFixed(0)}%</div>
@@ -2088,7 +2088,7 @@ function App() {
                         ) : snapGrid ? (
                              <>
                                 <div className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"></div>
-                                <span className="text-yellow-400 font-bold">SNAP: GRID</span>
+                                <span className="text-yellow-400 font-bold">SNAP: GRADE</span>
                              </>
                         ) : (
                              <>
